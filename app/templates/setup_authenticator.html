@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="he" dir="rtl" data-theme="light">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>חיבור Authenticator · מערכת התורים</title>{% include "_design_system.html" %}</head>
+<body><main class="auth-shell">
+  <section class="auth-main">
+    <header class="auth-top">{% include "_brand.html" %}<button id="theme-toggle" class="theme-toggle" type="button">מצב כהה</button></header>
+    <div class="auth-content">
+      <p class="eyebrow">SECURE SETUP · 2/2</p><h1>חיבור Microsoft Authenticator</h1><p class="auth-lede">באפליקציה לחצו על +, בחרו Other account וסרקו את הקוד.</p>
+      {% if error %}<div class="notice notice-error" role="alert">הקוד אינו תקין. המתינו לקוד חדש ונסו שוב.</div>{% endif %}
+      <img class="qr" src="/setup/qr" alt="QR לחיבור Microsoft Authenticator">
+      <p class="hint" style="text-align:center;margin-bottom:7px">אם הסריקה אינה מצליחה, הזינו ידנית:</p><div class="manual-key">{{ manual_key }}</div>
+      <form class="auth-form" method="post" action="/setup/verify" style="margin-top:18px"><div class="field"><label for="code">קוד אימות בן 6 ספרות</label><input class="input input-otp" id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="000000" required></div><button class="btn btn-primary" type="submit">אימות והפעלת 2FA</button></form>
+    </div>
+  </section>
+  <aside class="auth-side"><div class="auth-side-content"><p class="eyebrow">MICROSOFT AUTHENTICATOR</p><h2>עוד רגע החשבון<br>מוכן לשימוש.</h2><p>סרקו את הקוד, הזינו את שש הספרות וסיימו את תהליך ההקמה.</p><ul class="side-list"><li><span class="side-icon">1</span><span>פתחו Microsoft Authenticator</span></li><li><span class="side-icon">2</span><span>סרקו את קוד ה־QR</span></li><li><span class="side-icon">3</span><span>הזינו את הקוד המתחלף</span></li></ul></div></aside>
+</main>{% include "_theme_script.html" %}</body></html>

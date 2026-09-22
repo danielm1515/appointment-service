@@ -1,0 +1,114 @@
+# Appointment Service MVP
+
+שירות דטרמיניסטי לשליפת התור הרלוונטי של מטופל עבור Hospital Patient Agent (ה-API לקריאה בלבד), עם ממשק ניהול שבו מנהל מחובר קובע ומבטל תורים. המימוש כולל API ב-FastAPI, מסד SQLite פנימי, נתוני דמו, Audit טכני ואריזה כ-container יחיד.
+
+## הפעלה
+
+דרישה מקדימה: Docker Desktop פעיל.
+
+```bash
+docker compose up --build -d
+docker compose ps
+```
+
+השירות זמין בכתובות:
+
+- API: `http://localhost:8080`
+- ממשק תורים: `http://localhost:8080/`
+- Swagger: `http://localhost:8080/docs`
+- Health: `http://localhost:8080/health`
+
+בכניסה הראשונה הממשק יעבור ל-`/setup`. קוד ההקמה המקומי הוא `local-setup-token`. יש לבחור סיסמה באורך 12 תווים לפחות, לסרוק את ה-QR באמצעות Microsoft Authenticator ולאמת קוד בן 6 ספרות. בפריסה אמיתית חובה להחליף את `UI_SETUP_TOKEN` ואת `SESSION_SECRET` בערכים אקראיים ולהפעיל `SECURE_COOKIES=true` רק לאחר הגדרת HTTPS.
+
+קריאות Hospital Agent ל-`CheckAppointment` מוגנות בכותרת `X-API-Key`. בסביבת Docker המקומית מפתח הפיתוח הוא `local-development-api-key`. בפריסה אמיתית חובה להגדיר ערך אקראי וחזק באמצעות `APPOINTMENT_API_KEY`, לשמור אותו גם בסודות של Hospital Agent ולא להכניס אותו לקוד, ל-image או ללוגים.
+
+להגדרה מקומית, יש להעתיק את `.env.example` אל `.env`, להחליף את ערכי הדוגמה בסודות אקראיים, ולהריץ `docker compose up -d`. קובץ `.env` מוחרג מ-Git.
+
+## בדיקת תור קיים
+
+```bash
+curl -i \
+  -H "X-API-Key: local-development-api-key" \
+  -H "X-Case-ID: CASE-001" \
+  -H "X-Execution-ID: EXEC-001" \
+  http://localhost:8080/api/v1/patients/P-10041/appointment
+```
+
+תוצאה צפויה: `200`, ‏`found=true` והתור `APT-8391`. `appointment_at` מוחזר תמיד עם אזור זמן (שעון ישראל, `+03:00` בקיץ ו-`+02:00` בחורף), כי Hospital Agent דוחה זמן בלי אזור זמן.
+
+מטופל נוסף עם תור:
+
+```bash
+curl -i -H "X-API-Key: local-development-api-key" http://localhost:8080/api/v1/patients/P-20000/appointment
+```
+
+תוצאה צפויה: `200`, ‏`found=true` והתור `APT-8392`. התשובה כוללת גם `required_documents` (ראו "קביעת וביטול תורים בממשק").
+
+## בדיקת המטופל מול מרשם המטופלים
+
+כאשר `PATIENT_REGISTRY_URL` מוגדר (ברירת המחדל ב-`compose.yaml`), כל מזהה מטופל נבדק תחילה מול טבלת `patients` של Hospital Agent, בקריאה בלבד דרך התפקיד `hospital_reader`:
+
+- מטופל שאינו רשום במרשם: `404` עם `error=patient_not_found`.
+- מרשם שאינו זמין: `503` עם `error=patient_registry_unavailable`. השירות נכשל באופן סגור ואינו מחזיר תור למטופל שלא אומת.
+- מטופל רשום ללא תור: `200` עם `found=false`. זהו מצב עסקי תקין ולא כשל טכני.
+
+```bash
+curl -i -H "X-API-Key: local-development-api-key" http://localhost:8080/api/v1/patients/P-30000/appointment
+curl -i -H "X-API-Key: local-development-api-key" http://localhost:8080/api/v1/patients/P-99999/appointment
+```
+
+תוצאה צפויה: `P-30000` מחזיר `200` עם `found=false`, ו-`P-99999` מחזיר `404` עם `patient_not_found`.
+
+המרשם נמצא ב-PostgreSQL של Hospital Agent (`127.0.0.1:54322`, מסד `hospital`), ולכן Hospital Agent צריך לרוץ. מתוך ה-container הכתובת היא `host.docker.internal`, וזה עובד ב-Docker Desktop. ב-Linux הכתובת מתורגמת לכתובת ה-bridge, ש-PostgreSQL אינו מאזין לה כל עוד הפורט מפורסם על `127.0.0.1` בלבד, ולכן כל בקשה תקבל `503`; נדרש לפרסם את הפורט גם על כתובת שה-bridge מגיע אליה (למשל `172.17.0.1:54322`) או לחבר את שני הפרויקטים לרשת Docker משותפת.
+
+כאשר `PATIENT_REGISTRY_URL` אינו מוגדר או ריק (הרצה ללא compose), הבדיקה כבויה והשירות מתנהג כמו קודם: `P-99999` מחזיר `200` עם `found=false`. ב-compose אין לכבות אותה דרך `.env`, כי ערך ריק מוחלף בברירת המחדל. ביומן ההפעלה מופיעה השורה `patient registry check: enabled` או `disabled`.
+
+## קביעת וביטול תורים בממשק
+
+מנהל מחובר קובע תור מטופס "קביעת תור חדש" בדף הראשי: מטופל, מחלקה, תאריך ושעה (חובה), רופא ומיקום (לא חובה). המחלקות, הרופאים של כל מחלקה והמיקומים שלה מוגדרים בקטלוג קבוע, `app/catalog.py`, ונבחרים מרשימות. בבחירת מחלקה, רשימות הרופא והמיקום מציגות רק את שלה. התאריך נבחר בשלוש רשימות: יום, חודש (מספר ושם עברי) ושנה (השנה הנוכחית ושתיים אחריה). תאריך שאינו קיים, למשל 31/02, נדחה. השעה נבחרת מרשימה בשעון 24 שעות, במשבצות של 15 דקות בין 08:00 ל-17:45. השרת מקבל רק ערכים מהקטלוג: רופא או מיקום של מחלקה אחרת, או שעה מחוץ למשבצות, נדחים. כדי להוסיף מחלקה, רופא או מיקום, עורכים את `app/catalog.py` ובונים מחדש את ה-image. המטופל נבחר מרשימה נפתחת שנטענת ממרשם המטופלים (מזהה ושם, ללא טלפון), ושמו מוצג גם ליד המזהה בטבלת התורים. כשהמרשם אינו זמין או אינו מוגדר, הדף עדיין נפתח ומציג את התורים, אבל הרשימה והכפתור כבויים. הרשימה היא נוחות בלבד: השרת בודק את המטופל מול המרשם בכל קביעה מחדש. המועד הוא שעון ישראל וחייב להיות בעתיד. לפני השמירה המטופל נבדק מול מרשם המטופלים, והקביעה נכשלת באופן סגור:
+
+- מטופל שאינו רשום במרשם: התור לא נקבע (`400`).
+- מרשם שאינו זמין, או `PATIENT_REGISTRY_URL` שאינו מוגדר כלל: התור לא נקבע (`503`), כי אי אפשר לאמת את המטופל.
+
+תור חדש מקבל מזהה `APT-XXXXXX` ומצב `Scheduled`, ולכן `CheckAppointment` מחזיר אותו מיד. בכל שורה מתוכננת יש קישור "עריכה", שפותח את אותו טופס כשהוא מלא בפרטי התור. אפשר לשנות מחלקה, רופא, מיקום, תאריך ושעה, באותם כללים של קביעה, והתור נשמר במקום, עם אותו מזהה. המטופל אינו משתנה בעריכה: העברת תור למטופל אחר היא קביעה חדשה. תור מבוטל אינו ניתן לעריכה. יש גם כפתור "ביטול תור", שמשנה את המצב ל-`Cancelled`. דבר אינו נמחק, ותור מבוטל אינו מוחזר עוד מה-API. כל קביעה, ניסיון קביעה שנדחה, עריכה וביטול נרשמים ב-`appointment_audit_logs` (`operation` = `BookAppointment` / `UpdateAppointment` / `CancelAppointment`, `case_id` = `ui:<שם המשתמש>`).
+
+הקביעה והביטול זמינים בממשק בלבד, ואין להם נקודת קצה ב-API (הם אינם מופיעים ב-Swagger). הטפסים מוגנים באסימון CSRF, וכאשר `UI_AUTH_ENABLED=true` הם דורשים התחברות.
+
+לכל תור אפשר לסמן את המסמכים הנדרשים לו מתוך קטלוג קבוע של חמישה סוגים (`CBC`, `COAGULATION_TESTS`, `ECG`, `URINALYSIS`, `PREOP_SUMMARY`). הבחירה נשמרת עם התור בטבלה `appointment_required_documents`, והיא לא נגזרת מהרופא או מהמחלקה. בעריכה מוצגת הבחירה השמורה, ושמירה מחליפה אותה. `CheckAppointment` מחזיר אותה בשדה `required_documents`, רשימה ממוינת, וריקה כשאין דרישות. תורים שנקבעו לפני השינוי מקבלים רשימה ריקה. כדי לראות דרישות, עורכים את התור ומסמנים אותן (בדמו: APT-8391 של P-10041, עם CBC, COAGULATION_TESTS ו-ECG).
+
+## הדמיית timeout
+
+כאשר `ENABLE_FAILURE_SIMULATION=true`, הקריאה למזהה `P-TIMEOUT` מחזירה `504` ואינה מומרת ל-`found=false`:
+
+```bash
+curl -i -H "X-API-Key: local-development-api-key" http://localhost:8080/api/v1/patients/P-TIMEOUT/appointment
+```
+
+בסביבת Production יש להגדיר `ENABLE_FAILURE_SIMULATION=false`.
+
+## Trace ו-Audit
+
+הכותרות `X-Case-ID` ו-`X-Execution-ID` מתקבלות מה-Tool Executor. אם הן חסרות, השירות מייצר UUID ומחזיר אותו בכותרות התגובה. כל חיפוש נרשם בטבלה `appointment_audit_logs` וגם כ-JSON ב-stdout, עם התוצאה וזמן התגובה בלבד.
+
+## אחסון הנתונים
+
+ה-API ומסד SQLite רצים באותו container. קובץ הנתונים נשמר ב-`/data/appointments.db`, שמחובר ל-Docker volume בשם `appointment_sqlite_data`. לכן עדכון או יצירה מחדש של ה-container אינם מוחקים את הנתונים. אין container נוסף, והתורים עצמם אינם דורשים PostgreSQL או RDS. בדיקת המטופלים (ראו לעיל) קוראת את מרשם המטופלים מה-PostgreSQL של Hospital Agent, בקריאה בלבד, ואינה כותבת אליו דבר.
+
+## בדיקות
+
+```bash
+python -m pip install -r requirements-dev.txt
+pytest -q
+```
+
+## עצירה וניקוי
+
+```bash
+docker compose down
+```
+
+למחיקת נתוני SQLite המקומיים בלבד:
+
+```bash
+docker compose down -v
+```

@@ -1,0 +1,32 @@
+services:
+  api:
+    build: .
+    environment:
+      DATABASE_URL: sqlite:////data/appointments.db
+      SEED_DEMO_DATA: "true"
+      ENABLE_FAILURE_SIMULATION: "true"
+      MOCK_TIMEOUT_PATIENT_ID: P-TIMEOUT
+      SERVICE_VERSION: 1.5.0
+      UI_AUTH_ENABLED: "true"
+      UI_SETUP_TOKEN: ${UI_SETUP_TOKEN:-local-setup-token}
+      SESSION_SECRET: ${SESSION_SECRET:-local-session-secret-change-me}
+      SECURE_COOKIES: "false"
+      API_AUTH_ENABLED: "true"
+      APPOINTMENT_API_KEY: ${APPOINTMENT_API_KEY:-local-development-api-key}
+      # Sub-project 9: check every patient against HospitalAgent's registry (read-only role).
+      PATIENT_REGISTRY_URL: ${PATIENT_REGISTRY_URL:-postgresql+psycopg://hospital_reader:hospital_reader_dev@host.docker.internal:54322/hospital}
+    ports:
+      - "8080:8000"
+    # host.docker.internal reaches HospitalAgent's Postgres on Docker Desktop (Windows, macOS),
+    # which forwards it to the host's loopback. On Linux this mapping resolves the name to the
+    # Docker bridge address, but HospitalAgent publishes Postgres on 127.0.0.1:54322 only, so
+    # the connection is refused and every lookup gets 503. Linux would need that port published
+    # on an address the bridge can reach (e.g. 172.17.0.1:54322), or a shared Docker network.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - appointment_sqlite_data:/data
+    restart: unless-stopped
+
+volumes:
+  appointment_sqlite_data:

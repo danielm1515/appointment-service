@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="he" dir="rtl" data-theme="light">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>הקמת מנהל · מערכת התורים</title>{% include "_design_system.html" %}</head>
+<body><main class="auth-shell">
+  <section class="auth-main">
+    <header class="auth-top">{% include "_brand.html" %}<button id="theme-toggle" class="theme-toggle" type="button">מצב כהה</button></header>
+    <div class="auth-content">
+      <p class="eyebrow">SECURE SETUP · 1/2</p><h1>הגדרת מנהל ראשונית</h1><p class="auth-lede">צרו חשבון מנהל. בשלב הבא נחבר אותו ל־Microsoft Authenticator.</p>
+      {% if error %}<div class="notice notice-error" role="alert">{{ error }}</div>{% endif %}
+      <form class="auth-form" method="post" action="/setup">
+        <div class="field"><label for="setup_token">קוד הקמה</label><input class="input" id="setup_token" name="setup_token" type="password" autocomplete="off" required><p class="hint">קוד חד־פעמי שהוגדר בסביבת השרת.</p></div>
+        <div class="field"><label for="username">שם משתמש</label><input class="input" id="username" name="username" autocomplete="username" required></div>
+        <div class="field"><label for="password">סיסמה</label><input class="input" id="password" name="password" type="password" minlength="12" autocomplete="new-password" required><p class="hint">לפחות 12 תווים.</p></div>
+        <div class="field"><label for="password_confirm">אימות סיסמה</label><input class="input" id="password_confirm" name="password_confirm" type="password" minlength="12" autocomplete="new-password" required></div>
+        <button class="btn btn-primary" type="submit">המשך להגדרת Authenticator</button>
+      </form>
+    </div>
+  </section>
+  <aside class="auth-side"><div class="auth-side-content"><p class="eyebrow">ADMIN ONBOARDING</p><h2>שתי שכבות הגנה<br>לגישה למידע.</h2><p>הסיסמה נשמרת כגיבוב מאובטח, ובכל כניסה נדרש גם קוד מתחלף.</p><ul class="side-list"><li><span class="side-icon">1</span><span>יצירת חשבון מנהל</span></li><li><span class="side-icon">2</span><span>סריקת QR ואימות הקוד</span></li></ul></div></aside>
+</main>{% include "_theme_script.html" %}</body></html>

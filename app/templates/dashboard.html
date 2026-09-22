@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="he" dir="rtl" data-theme="light">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ניהול תורים · המרכז הרפואי רמון</title>
+  {% include "_design_system.html" %}
+  <style>
+    .app-header{background:var(--surface-000);border-bottom:1px solid var(--line-200)}
+    .header-inner{min-height:76px;display:flex;align-items:center;justify-content:space-between;gap:20px}
+    .header-actions{display:flex;align-items:center;gap:10px}.service-status{display:inline-flex;align-items:center;gap:8px;padding:7px 11px;background:var(--teal-100);color:var(--success-500);border-radius:999px;font-size:13px;font-weight:600}.status-dot{width:7px;height:7px;border-radius:50%;background:var(--success-500);box-shadow:0 0 0 4px color-mix(in srgb,var(--success-500),transparent 82%)}
+    .logout-form{margin:0}.logout-button{background:transparent;border:1px solid var(--line-200);color:var(--ink-700);border-radius:10px;padding:8px 13px;font-weight:600;cursor:pointer}
+    .main{padding:40px 0 60px}.hero{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:28px}.hero h1{margin:7px 0 6px;color:var(--ink-900);font-size:34px;line-height:42px}.hero-copy{margin:0;color:var(--ink-500);line-height:24px}
+    .summary{display:grid;grid-template-columns:repeat(2,minmax(0,220px));gap:14px}.stat{background:var(--surface-000);border:1px solid var(--line-200);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow-card)}.stat-label{color:var(--ink-500);font-size:13px;margin-bottom:6px}.stat-value{color:var(--ink-900);font-size:28px;line-height:34px;font-weight:600;font-family:"IBM Plex Mono",monospace}
+    .panel{background:var(--surface-000);border:1px solid var(--line-200);border-radius:18px;box-shadow:var(--shadow-card);overflow:hidden}.panel-header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:20px 22px;border-bottom:1px solid var(--line-200)}.panel-title h2{margin:0 0 3px;color:var(--ink-900);font-size:19px}.panel-title p{margin:0;color:var(--ink-500);font-size:13px}
+    .search{display:flex;align-items:center;gap:8px}.search .input{width:245px;padding:10px 12px}.search .btn{padding:10px 16px}.clear{color:var(--ink-500);font-size:13px;font-weight:600;text-decoration:none;padding:10px 6px}
+    .table-wrap{overflow:auto}table{width:100%;min-width:1180px;border-collapse:collapse}th,td{text-align:right;padding:15px 18px;border-bottom:1px solid var(--line-200);white-space:nowrap}th{background:var(--surface-100);color:var(--ink-500);font-size:12px;font-weight:600;letter-spacing:.02em}td{color:var(--ink-700);font-size:14px}tbody tr:last-child td{border-bottom:0}tbody tr:hover{background:var(--brand-100)}.id{direction:ltr;display:inline-block;color:var(--ink-900);font-family:"IBM Plex Mono",monospace;font-size:13px;font-weight:500}.status-badge{display:inline-flex;padding:5px 9px;border-radius:999px;background:var(--teal-100);color:var(--success-500);font-size:12px;font-weight:600}.empty{padding:60px 24px;text-align:center;color:var(--ink-500)}.empty strong{display:block;color:var(--ink-900);font-size:17px;margin-bottom:7px}.footer-note{margin:18px 2px 0;color:var(--ink-500);font-size:12px}
+    .booking{margin-bottom:22px}.booking-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 16px;padding:20px 22px}.booking-form .field{margin:0}.booking-form .input{width:100%}.booking-actions{grid-column:1/-1;display:flex;justify-content:flex-start;gap:10px}.booking-actions .btn{padding:11px 22px}.optional{color:var(--ink-500);font-weight:400;font-size:12px}
+    .date-parts{display:grid;grid-template-columns:0.8fr 1.6fr 1fr;gap:8px}.field-label{font-size:13px;font-weight:600;letter-spacing:.02em;color:var(--ink-700)}
+    .row-actions{display:flex;gap:8px;align-items:center}.edit-link{text-decoration:none;display:inline-block}.fixed-value{direction:rtl;background:var(--surface-100);color:var(--ink-700)}
+    .booking-warning{padding:18px 22px 0}.booking-warning .notice{margin:0}.patient-name{display:block;color:var(--ink-500);font-size:12px;margin-top:2px}select.input{appearance:auto}select.input:disabled,.btn:disabled{opacity:.55;cursor:not-allowed}
+    .docs-field{grid-column:1/-1}.doc-options{display:flex;flex-wrap:wrap;gap:8px 20px}.doc-option{display:inline-flex;align-items:center;gap:7px;font-size:14px;color:var(--ink-700);cursor:pointer}.doc-option .id{font-size:12px;color:var(--ink-500)}.doc-list{white-space:normal;min-width:160px;font-size:13px}
+    .messages{margin-bottom:18px}.messages .notice{margin:0}.cancel-form{margin:0}.cancel-button{background:transparent;border:1px solid var(--line-200);color:var(--ink-700);border-radius:9px;padding:6px 11px;font-size:13px;font-weight:600;cursor:pointer}.cancel-button:hover{border-color:currentColor}.status-badge.cancelled{background:var(--surface-100);color:var(--ink-500)}
+    @media(max-width:820px){.booking-form{grid-template-columns:1fr}}
+    @media(max-width:820px){.header-inner,.hero,.panel-header{align-items:stretch;flex-direction:column}.header-inner{padding-block:16px}.header-actions{flex-wrap:wrap}.summary{grid-template-columns:1fr 1fr}.search{flex-wrap:wrap}.search .input{width:100%}.search .btn{flex:1}.main{padding-top:28px}.hero h1{font-size:29px}}
+  </style>
+</head>
+<body>
+  <header class="app-header"><div class="container header-inner">{% include "_brand.html" %}<div class="header-actions"><span class="service-status"><span class="status-dot"></span>השירות פעיל</span><button id="theme-toggle" class="theme-toggle" type="button">מצב כהה</button>{% if auth_enabled %}<form class="logout-form" method="post" action="/logout"><button class="logout-button" type="submit">יציאה</button></form>{% endif %}</div></div></header>
+  <main class="container main">
+    <section class="hero"><div><p class="eyebrow">APPOINTMENT SERVICE</p><h1>ניהול תורים</h1><p class="hero-copy">קביעת תורים למטופלים הרשומים במאגר, ביטול תורים, וחיפוש לפי מזהה מטופל.</p></div><div class="summary" aria-label="סיכום תורים"><article class="stat"><div class="stat-label">סה״כ תורים</div><div class="stat-value">{{ total_count }}</div></article><article class="stat"><div class="stat-label">תורים מתוכננים</div><div class="stat-value">{{ scheduled_count }}</div></article></div></section>
+    {% if notice or error %}<div class="messages">{% if notice %}<div class="notice notice-success" role="status">{{ notice }}</div>{% endif %}{% if error %}<div class="notice notice-error" role="alert">{{ error }}</div>{% endif %}</div>{% endif %}
+    <section class="panel booking" aria-labelledby="booking-title">
+      <div class="panel-header"><div class="panel-title">{% if editing %}<h2 id="booking-title">עריכת תור <span class="id">{{ editing.appointment_id }}</span></h2><p>המטופל אינו משתנה בעריכה. השעה היא שעון ישראל.</p>{% else %}<h2 id="booking-title">קביעת תור חדש</h2><p>המטופל נבדק מול מאגר המטופלים של Hospital Agent לפני שהתור נשמר. השעה היא שעון ישראל.</p>{% endif %}</div></div>
+      {% if patients_error and not editing %}<div class="booking-warning"><div class="notice notice-error" role="alert">{{ patients_error }}</div></div>{% endif %}
+      <form class="booking-form" method="post" action="{% if editing %}/appointments/{{ editing.appointment_id }}{% else %}/appointments{% endif %}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {% if editing %}<div class="field"><span class="field-label">מטופל</span><div class="input fixed-value"><span class="id">{{ editing.patient_id }}</span>{% if patient_names.get(editing.patient_id) %} · {{ patient_names[editing.patient_id] }}{% endif %}</div></div>
+        {% else %}<div class="field"><label for="book_patient_id">מטופל</label><select class="input" id="book_patient_id" name="patient_id" required{% if not patients %} disabled{% endif %}><option value="">בחרו מטופל…</option>{% for pid, name in patients or [] %}<option value="{{ pid }}"{% if form.patient_id == pid %} selected{% endif %}>{{ pid }} · {{ name }}</option>{% endfor %}</select></div>{% endif %}
+        <div class="field"><label for="book_department">מחלקה</label><select class="input" id="book_department" name="department" required><option value="">בחרו מחלקה…</option>{% for d in departments %}<option value="{{ d.value }}"{% if form.department == d.value %} selected{% endif %}>{{ d.label }} · {{ d.value }}</option>{% endfor %}</select></div>
+        <div class="field"><label for="book_doctor_name">רופא <span class="optional">(לא חובה)</span></label><select class="input" id="book_doctor_name" name="doctor_name" data-filter-by="book_department"><option value="">ללא רופא מסוים</option>{% for d in departments %}{% for doctor in d.doctors %}<option value="{{ doctor }}" data-department="{{ d.value }}"{% if form.doctor_name == doctor and form.department == d.value %} selected{% endif %}>{{ doctor }}</option>{% endfor %}{% endfor %}</select></div>
+        <div class="field"><span class="field-label" id="book_date_label">תאריך</span><div class="date-parts" role="group" aria-labelledby="book_date_label"><select class="input mono" name="appointment_day" aria-label="יום" required><option value="">יום</option>{% for d in range(1, 32) %}<option value="{{ d }}"{% if form.appointment_day == d|string %} selected{% endif %}>{{ "%02d"|format(d) }}</option>{% endfor %}</select><select class="input" name="appointment_month" aria-label="חודש" required><option value="">חודש</option>{% for name in months %}<option value="{{ loop.index }}"{% if form.appointment_month == loop.index|string %} selected{% endif %}>{{ "%02d"|format(loop.index) }} · {{ name }}</option>{% endfor %}</select><select class="input mono" name="appointment_year" aria-label="שנה" required><option value="">שנה</option>{% for y in years %}<option value="{{ y }}"{% if form.appointment_year == y|string %} selected{% endif %}>{{ y }}</option>{% endfor %}</select></div></div>
+        <div class="field"><label for="book_appointment_time">שעה <span class="optional">(24 שעות)</span></label><select class="input mono" id="book_appointment_time" name="appointment_time" required><option value="">בחרו שעה…</option>{% for slot in time_slots %}<option value="{{ slot }}"{% if form.appointment_time == slot %} selected{% endif %}>{{ slot }}</option>{% endfor %}</select></div>
+        <div class="field"><label for="book_location">מיקום <span class="optional">(לא חובה)</span></label><select class="input" id="book_location" name="location" data-filter-by="book_department"><option value="">לפי המחלקה</option>{% for d in departments %}{% for place in d.locations %}<option value="{{ place }}" data-department="{{ d.value }}"{% if form.location == place and form.department == d.value %} selected{% endif %}>{{ place }}</option>{% endfor %}{% endfor %}</select></div>
+        <div class="field docs-field"><span class="field-label" id="book_docs_label">מסמכים נדרשים לתור <span class="optional">(לא חובה)</span></span><div class="doc-options" role="group" aria-labelledby="book_docs_label">{% for t in document_types %}<label class="doc-option"><input type="checkbox" name="required_documents" value="{{ t.code }}"{% if t.code in (form.required_documents or []) %} checked{% endif %}>{{ t.label }} <span class="id">{{ t.code }}</span></label>{% endfor %}</div></div>
+        <div class="booking-actions">{% if editing %}<button class="btn btn-primary" type="submit">שמירת שינויים</button><a class="btn btn-secondary" href="/">ביטול עריכה</a>{% else %}<button class="btn btn-primary" type="submit"{% if not patients %} disabled{% endif %}>קביעת תור</button>{% endif %}</div>
+      </form>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><div class="panel-title"><h2>רשימת התורים</h2><p>מידע עדכני ממסד הנתונים של השירות</p></div><form class="search" method="get" action="/"><label for="patient_id" hidden>מזהה מטופל</label><input class="input" id="patient_id" name="patient_id" value="{{ search_value }}" placeholder="לדוגמה PAT-1001"><button class="btn btn-primary" type="submit">חיפוש</button>{% if search_value %}<a class="clear" href="/">ניקוי</a>{% endif %}</form></div>
+      {% if appointments %}<div class="table-wrap"><table><thead><tr><th>מזהה תור</th><th>מטופל</th><th>מחלקה</th><th>רופא</th><th>מועד</th><th>מיקום</th><th>מסמכים נדרשים</th><th>סטטוס</th><th>פעולות</th></tr></thead><tbody>{% for appointment in appointments %}<tr><td><span class="id">{{ appointment.appointment_id }}</span></td><td><span class="id">{{ appointment.patient_id }}</span>{% if patient_names.get(appointment.patient_id) %}<span class="patient-name">{{ patient_names[appointment.patient_id] }}</span>{% endif %}</td><td>{{ department_label(appointment.department) }}</td><td>{{ appointment.doctor_name or "לא צוין" }}</td><td>{{ appointment.appointment_at.strftime("%d/%m/%Y %H:%M") }}</td><td>{{ appointment.location or "לא צוין" }}</td><td class="doc-list">{% if appointment.required_documents %}{% for code in appointment.required_documents %}{{ document_type_label(code) }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}ללא{% endif %}</td><td><span class="status-badge{% if appointment.status == 'Cancelled' %} cancelled{% endif %}">{{ status_labels.get(appointment.status, appointment.status) }}</span></td><td><div class="row-actions">{% if appointment.status == "Scheduled" %}<a class="cancel-button edit-link" href="/appointments/{{ appointment.appointment_id }}/edit">עריכה</a><form class="cancel-form" method="post" action="/appointments/{{ appointment.appointment_id }}/cancel" onsubmit="return confirm('לבטל את התור {{ appointment.appointment_id }}?')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="cancel-button" type="submit">ביטול תור</button></form>{% endif %}</div></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty"><strong>לא נמצאו תורים</strong>נסו לחפש מזהה מטופל אחר.</div>{% endif %}
+    </section>
+    <p class="footer-note">ממשק ניהול פנימי · Hospital Agent Appointment Service</p>
+  </main>
+  <script>
+    // Doctors and locations follow the chosen department. The server checks the pairing anyway.
+    (function () {
+      var department = document.getElementById("book_department");
+      if (!department) return;
+      var dependents = document.querySelectorAll("select[data-filter-by='book_department']");
+      function filter() {
+        dependents.forEach(function (select) {
+          select.querySelectorAll("option[data-department]").forEach(function (option) {
+            var match = option.dataset.department === department.value;
+            option.hidden = !match;
+            option.disabled = !match;
+            if (!match && option.selected) select.value = "";
+          });
+          select.disabled = !department.value;
+        });
+      }
+      department.addEventListener("change", filter);
+      filter();
+    })();
+  </script>
+  {% include "_theme_script.html" %}
+</body></html>

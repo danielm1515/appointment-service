@@ -1,0 +1,3 @@
+<script>
+  (function(){var root=document.documentElement,button=document.getElementById("theme-toggle"),stored=localStorage.getItem("appointment-theme"),preferred=window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";root.setAttribute("data-theme",stored||preferred);function label(){if(button)button.textContent=root.getAttribute("data-theme")==="dark"?"מצב בהיר":"מצב כהה"}label();if(button)button.addEventListener("click",function(){var next=root.getAttribute("data-theme")==="dark"?"light":"dark";root.setAttribute("data-theme",next);localStorage.setItem("appointment-theme",next);label()})}());
+</script>
