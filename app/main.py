@@ -26,9 +26,25 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from . import catalog
 from .config import Settings
-from .models import AdminUser, Appointment, AppointmentRequiredDocument, AuditLog, Base, DocumentTypeRow
+from .models import (
+    AdminUser,
+    Appointment,
+    AppointmentExamType,
+    AppointmentRequiredDocument,
+    AuditLog,
+    Base,
+    DocumentTypeRow,
+    ExamTypeRow,
+)
 from .patient_registry import PatientRegistry, PostgresPatientRegistry, RegistryUnavailable
-from .schemas import AppointmentList, AppointmentResult, ErrorResult, HealthResult
+from .schemas import (
+    AppointmentList,
+    AppointmentResult,
+    ErrorResult,
+    ExamCatalogInconsistent,
+    HealthResult,
+    InstructionResult,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("appointment-service")
@@ -42,6 +58,11 @@ STATUS_LABELS = {"Scheduled": "מתוכנן", "Cancelled": "בוטל"}
 ISRAEL = ZoneInfo("Asia/Jerusalem")
 MAX_LIST = 100
 MAX_LIST_WINDOW = timedelta(days=366)
+# upcoming_count counts the patient's Scheduled appointments in (now, now + UPCOMING_WINDOW) -
+# the same 90 days the hospital-agent's appointment picker offers (NewRequest.tsx PICKER_DAYS,
+# design D5). The two are coupled: the agent's message says "you have other appointments" when
+# this is above 1, so it must count only appointments the patient could actually pick.
+UPCOMING_WINDOW = timedelta(days=90)
 
 
 class SimulatedTimeout(Exception):
@@ -60,6 +81,9 @@ def _validate_booking(form: dict[str, str]) -> tuple[str | None, datetime | None
         return f"הרופא שנבחר אינו שייך למחלקת {department.label}.", None
     if form["location"] and form["location"] not in department.locations:
         return f"המיקום שנבחר אינו שייך למחלקת {department.label}.", None
+    exam = catalog.EXAMS_BY_CODE.get(form["exam_type"])
+    if exam is None or exam.department != department.value:
+        return f"סוג הבדיקה שנבחר אינו שייך למחלקת {department.label}.", None
     parts = (form["appointment_day"], form["appointment_month"], form["appointment_year"])
     if not all(p.isdigit() for p in parts):
         return "יש לבחור תאריך מלא לתור: יום, חודש ושנה.", None
@@ -113,6 +137,55 @@ def _seed_document_types(session: Session) -> None:
         else:
             row.label_he, row.max_age_days = t.label, t.max_age_days
     session.commit()
+
+
+def _seed_exam_types(session: Session) -> None:
+    """The exam-type catalog is reference data too, upserted on every start, in line with
+    app/catalog.py (sub-project 18 design D1)."""
+    for e in catalog.EXAM_TYPES:
+        row = session.get(ExamTypeRow, e.code)
+        if row is None:
+            session.add(ExamTypeRow(
+                code=e.code, department=e.department, label_he=e.label,
+                instruction_id=e.instruction_id, instruction_version=e.instruction_version,
+                instruction_title=e.instruction_title, instruction_text=e.instruction_text,
+            ))
+        else:
+            row.department = e.department
+            row.label_he = e.label
+            row.instruction_id = e.instruction_id
+            row.instruction_version = e.instruction_version
+            row.instruction_title = e.instruction_title
+            row.instruction_text = e.instruction_text
+    session.commit()
+
+
+def _backfill_exam_types(session: Session) -> None:
+    """The two demo appointments that predate exam types get one, once (design D2): only when
+    the appointment exists, still has no exam-type link, and its department still matches the
+    exam's own department - true for a fresh seed just as much as for a pre-existing database
+    made by the old schema. An appointment moved to another department (fix round 1, I1) is
+    left unlinked instead, so it resolves to its own (now different) department's default."""
+    for appointment_id, exam_code in (("APT-8391", "NEURO_VISIT"), ("APT-8392", "CARD_STRESS")):
+        appointment = session.get(Appointment, appointment_id)
+        if (appointment is not None and appointment.exam_type_link is None
+                and appointment.department == catalog.EXAMS_BY_CODE[exam_code].department):
+            session.add(AppointmentExamType(appointment_id=appointment_id, exam_code=exam_code))
+    session.commit()
+
+
+def _resolved_exam_label(appointment: Appointment) -> str:
+    """What the dashboard shows for an appointment's exam type (fix round 1, I3): the linked
+    exam's own label, or - when there is no link - the department's default exam, marked as
+    such so the admin can tell a real choice from a resolved one. Never raises: an appointment
+    whose department (or linked exam code) fell out of the catalog just shows a placeholder,
+    the same fail-closed spirit as the API without crashing an internal admin page over it."""
+    if appointment.exam_code:
+        return catalog.exam_type_label(appointment.exam_code)
+    try:
+        return f"{catalog.default_exam(appointment.department).label} (ברירת מחדל)"
+    except KeyError:
+        return "לא צוין"
 
 
 def _seed(session: Session) -> None:
@@ -232,11 +305,13 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        Base.metadata.create_all(engine)  # creates the two new tables in an existing database too
+        Base.metadata.create_all(engine)  # creates new tables in an existing database too
         with SessionLocal() as session:
             _seed_document_types(session)
+            _seed_exam_types(session)
             if should_seed:
                 _seed(session)
+            _backfill_exam_types(session)
         yield
         engine.dispose()
         if hasattr(registry, "dispose"):
@@ -348,6 +423,9 @@ def create_app(
                 "department_label": catalog.department_label,
                 "document_types": catalog.DOCUMENT_TYPES,
                 "document_type_label": catalog.document_type_label,
+                "exam_types": catalog.EXAM_TYPES,
+                "exam_type_label": catalog.exam_type_label,
+                "resolved_exam_label": _resolved_exam_label,
                 "time_slots": catalog.TIME_SLOTS,
                 "editing": editing,
                 "months": catalog.MONTHS,
@@ -381,6 +459,7 @@ def create_app(
         csrf_token_field: str = Form("", alias="csrf_token"),
         patient_id: str = Form(""),
         department: str = Form(""),
+        exam_type: str = Form(""),
         doctor_name: str = Form(""),
         appointment_day: str = Form(""),
         appointment_month: str = Form(""),
@@ -398,6 +477,7 @@ def create_app(
         form = {
             "patient_id": patient_id.strip(),
             "department": department.strip(),
+            "exam_type": exam_type.strip(),
             "doctor_name": doctor_name.strip(),
             "appointment_day": appointment_day.strip(),
             "appointment_month": appointment_month.strip(),
@@ -447,6 +527,7 @@ def create_app(
                 location=form["location"] or None,
                 status="Scheduled",
                 required_document_links=[AppointmentRequiredDocument(document_type=c) for c in codes],
+                exam_type_link=AppointmentExamType(exam_code=form["exam_type"]),
             ))
             # One commit: the appointment and its audit row land together or not at all.
             _write_audit(session, case_id=actor(request), execution_id=appointment_id,
@@ -462,6 +543,7 @@ def create_app(
         return {
             "patient_id": appointment.patient_id,
             "department": appointment.department,
+            "exam_type": appointment.exam_code or "",
             "doctor_name": appointment.doctor_name or "",
             "location": appointment.location or "",
             "appointment_day": str(at.day),
@@ -501,6 +583,7 @@ def create_app(
         appointment_id: str = ApiPath(max_length=64),
         csrf_token_field: str = Form("", alias="csrf_token"),
         department: str = Form(""),
+        exam_type: str = Form(""),
         doctor_name: str = Form(""),
         appointment_day: str = Form(""),
         appointment_month: str = Form(""),
@@ -524,6 +607,7 @@ def create_app(
             form = {
                 "patient_id": appointment.patient_id,
                 "department": department.strip(),
+                "exam_type": exam_type.strip(),
                 "doctor_name": doctor_name.strip(),
                 "appointment_day": appointment_day.strip(),
                 "appointment_month": appointment_month.strip(),
@@ -545,6 +629,7 @@ def create_app(
             appointment.location = form["location"] or None
             appointment.appointment_at = when
             appointment.required_document_links = [AppointmentRequiredDocument(document_type=c) for c in codes]
+            appointment.exam_type_link = AppointmentExamType(exam_code=form["exam_type"])
             # One commit: the change and its audit row land together or not at all.
             _write_audit(session, case_id=actor(request), execution_id=appointment_id,
                          patient_id=appointment.patient_id, result="updated",
@@ -789,6 +874,12 @@ def create_app(
             max_length=64,
             pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
         ),
+        appointment_id: str | None = Query(
+            default=None,
+            min_length=1,
+            max_length=64,
+            pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        ),
         x_case_id: str | None = Header(default=None, alias="X-Case-ID"),
         x_execution_id: str | None = Header(default=None, alias="X-Execution-ID"),
         supplied_api_key: str | None = Security(api_key_header),
@@ -825,15 +916,51 @@ def create_app(
                 if refusal is not None:
                     return refusal
 
-                appointment = session.scalar(
-                    select(Appointment)
-                    .where(
+                if appointment_id:
+                    # Only that patient's own Scheduled appointment - never another patient's,
+                    # and never a cancelled one (design D3/D6).
+                    appointment = session.scalar(
+                        select(Appointment).where(
+                            Appointment.appointment_id == appointment_id,
+                            Appointment.patient_id == patient_id,
+                            Appointment.status == "Scheduled",
+                        )
+                    )
+                else:
+                    appointment = session.scalar(
+                        select(Appointment)
+                        .where(
+                            Appointment.patient_id == patient_id,
+                            Appointment.status == "Scheduled",
+                        )
+                        .order_by(Appointment.appointment_at.asc())
+                        .limit(1)
+                    )
+                now_local = datetime.now(CLINIC_TZ).replace(tzinfo=None)
+                upcoming_count = session.scalar(
+                    select(func.count()).select_from(Appointment).where(
                         Appointment.patient_id == patient_id,
                         Appointment.status == "Scheduled",
+                        Appointment.appointment_at > now_local,
+                        Appointment.appointment_at < now_local + UPCOMING_WINDOW,
                     )
-                    .order_by(Appointment.appointment_at.asc())
-                    .limit(1)
-                )
+                ) or 0
+                try:
+                    # Resolved (and validated against the catalog) before any audit row is
+                    # written, so a catalog inconsistency never gets recorded as "found" (M4).
+                    body = AppointmentResult(found=bool(appointment), appointment=appointment,
+                                             upcoming_count=upcoming_count)
+                except ExamCatalogInconsistent:
+                    latency = round((time.perf_counter() - started) * 1000)
+                    _write_audit(session, case_id=case_id, execution_id=execution_id,
+                                patient_id=patient_id, result="technical_failure",
+                                latency_ms=latency)
+                    return JSONResponse(
+                        status_code=503,
+                        content={"error": "service_unavailable",
+                                "message": "The appointment's exam type is not in the catalog"},
+                        headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id},
+                    )
                 result = "found" if appointment else "not_found"
                 latency = round((time.perf_counter() - started) * 1000)
                 _write_audit(
@@ -844,7 +971,7 @@ def create_app(
                     result=result,
                     latency_ms=latency,
                 )
-                return AppointmentResult(found=bool(appointment), appointment=appointment)
+                return body
             except SimulatedTimeout:
                 latency = round((time.perf_counter() - started) * 1000)
                 _write_audit(
@@ -939,10 +1066,24 @@ def create_app(
                     .order_by(Appointment.appointment_at.asc(), Appointment.appointment_id.asc())
                     .limit(MAX_LIST + 1)
                 ).all()
+                try:
+                    # Resolved (and validated against the catalog) before any audit row - a
+                    # catalog inconsistency in any row must never be recorded as "found" (M4).
+                    body = AppointmentList(appointments=rows[:MAX_LIST], truncated=len(rows) > MAX_LIST)
+                except ExamCatalogInconsistent:
+                    _write_audit(session, case_id=case_id, execution_id=execution_id, patient_id=patient_id,
+                                 result="technical_failure", operation="ListAppointments",
+                                 latency_ms=round((time.perf_counter() - started) * 1000))
+                    return JSONResponse(
+                        status_code=503,
+                        content={"error": "service_unavailable",
+                                "message": "An appointment's exam type is not in the catalog"},
+                        headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id},
+                    )
                 _write_audit(session, case_id=case_id, execution_id=execution_id, patient_id=patient_id,
                              result="found" if rows else "not_found", operation="ListAppointments",
                              latency_ms=round((time.perf_counter() - started) * 1000))
-                return AppointmentList(appointments=rows[:MAX_LIST], truncated=len(rows) > MAX_LIST)
+                return body
             except SimulatedTimeout:
                 latency = round((time.perf_counter() - started) * 1000)
                 _write_audit(
@@ -970,6 +1111,84 @@ def create_app(
                     },
                     headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id},
                 )
+
+    @app.get(
+        "/api/v1/instructions/{source_id}",
+        response_model=InstructionResult,
+        responses={
+            400: {"model": ErrorResult},
+            401: {"model": ErrorResult},
+            404: {"model": ErrorResult},
+        },
+        tags=["Instructions"],
+        operation_id="GetInstruction",
+    )
+    def get_instruction(
+        request: Request,
+        response: Response,
+        source_id: str = ApiPath(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"),
+        version: str = Query(min_length=1, max_length=16),
+        x_case_id: str | None = Header(default=None, alias="X-Case-ID"),
+        x_execution_id: str | None = Header(default=None, alias="X-Execution-ID"),
+        supplied_api_key: str | None = Security(api_key_header),
+    ) -> InstructionResult | JSONResponse:
+        """The instruction system Hospital Agent's LoadInstructions reads (design D3/D8): only
+        source_id + version, no patient field at all (spec §11) - so no registry check either."""
+        if api_auth and (
+            not api_key_value
+            or not supplied_api_key
+            or not secrets.compare_digest(supplied_api_key, api_key_value)
+        ):
+            return JSONResponse(
+                status_code=401,
+                content={"error": "unauthorized", "message": "A valid API key is required"},
+                headers={"WWW-Authenticate": "ApiKey"},
+            )
+        started = time.perf_counter()
+        case_id = (x_case_id or str(uuid4()))[:128]
+        execution_id = (x_execution_id or str(uuid4()))[:128]
+        response.headers["X-Case-ID"] = case_id
+        response.headers["X-Execution-ID"] = execution_id
+
+        exam = next(
+            (e for e in catalog.EXAM_TYPES
+             if e.instruction_id == source_id and e.instruction_version == version),
+            None,
+        )
+        result = "found" if exam else "not_found"
+        with request.app.state.SessionLocal() as session:
+            try:
+                # No patient in this flow (spec §11): the audit row's patient_id is the empty
+                # string, since the column itself is not-null.
+                _write_audit(
+                    session,
+                    case_id=case_id,
+                    execution_id=execution_id,
+                    patient_id="",
+                    result=result,
+                    operation="GetInstruction",
+                    latency_ms=round((time.perf_counter() - started) * 1000),
+                )
+            except (OperationalError, SQLAlchemyError):
+                session.rollback()
+                logger.exception("Appointment database operation failed")
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "service_unavailable",
+                        "message": "Appointment service is temporarily unavailable",
+                    },
+                    headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id},
+                )
+        if exam is None:
+            # Exactly {"error": ...} - no "message" field (the contract Hospital Agent reads).
+            return JSONResponse(
+                status_code=404,
+                content={"error": "instruction_not_found"},
+                headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id},
+            )
+        return InstructionResult(source_id=exam.instruction_id, version=exam.instruction_version,
+                                 title=exam.instruction_title, text=exam.instruction_text)
 
     return app
 
