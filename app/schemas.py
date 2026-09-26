@@ -28,6 +28,11 @@ class AppointmentResult(BaseModel):
     appointment: AppointmentOut | None
 
 
+class AppointmentList(BaseModel):
+    appointments: list[AppointmentOut]
+    truncated: bool
+
+
 class HealthResult(BaseModel):
     status: str
     database: str

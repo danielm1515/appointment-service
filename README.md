@@ -44,6 +44,20 @@ curl -i -H "X-API-Key: local-development-api-key" http://localhost:8080/api/v1/p
 
 תוצאה צפויה: `200`, ‏`found=true` והתור `APT-8392`. התשובה כוללת גם `required_documents` (ראו "קביעת וביטול תורים בממשק").
 
+## רשימת התורים של מטופל
+
+```bash
+curl -i \
+  -H "X-API-Key: local-development-api-key" \
+  "http://localhost:8080/api/v1/patients/P-10041/appointments?from=2026-10-01T00:00:00%2B03:00&to=2027-01-01T00:00:00%2B02:00"
+```
+
+תוצאה צפויה: `200` עם `appointments` (מסודר לפי `appointment_at`, מהמוקדם למאוחר, ובאותו זמן בדיוק - לפי `appointment_id`) ו-`truncated`. `from` ו-`to` הם חובה, זמן ISO עם אזור זמן (בלעדיו: `400`), כאשר `from` נכלל בטווח ו-`to` לא (`from <= appointment_at < to`), והפרש שביניהם עד 366 יום (כולל). הרשימה כוללת גם תורים שבוטלו (`Cancelled`) - עובדה שהמטופל צריך לראות - ולא רק תורים מתוכננים. הרשימה מוגבלת ל-100 שורות; כשיש יותר, `truncated=true` והשורה ה-101 ואילך אינן מוחזרות.
+
+ההשוואה לטווח נעשית אחרי המרה לשעון ישראל (השורות שמורות כשעון ישראל מקומי בלי אזור זמן, בדיוק כמו ב-`CheckAppointment`), כך ש-`from`/`to` אפשר לשלוח בכל אזור זמן (למשל UTC) והשירות ממיר אותם לפני ההשוואה. השעה שבה שעון הקיץ חוזר לשעון חורף הופכת שעה מקומית אחת בשנה לדו-משמעית; טווח שנופל בתוכה עלול לפספס תור שנקבע בה - מגבלה ידועה ומקובלת.
+
+קודי שגיאה: `400 validation_error` - `from`/`to` חסרים, לא ניתנים לפענוח כתאריך, בלי אזור זמן, `from >= to`, הפרש מעל 366 יום, או `patient_id` שאינו תואם את התבנית הנדרשת. `401 unauthorized` - מפתח API חסר או שגוי. `404 patient_not_found` ו-`503 patient_registry_unavailable` - כמו ב-`CheckAppointment` (ראו "בדיקת המטופל מול מרשם המטופלים"). `503 service_unavailable` - תקלת מסד נתונים. `504 timeout` - הדמיית timeout (ראו "הדמיית timeout"). ל-`appointment_audit_logs` (`operation=ListAppointments`) נרשמות רק התוצאות שקיבלו החלטה על המטופל או על התור: `200` (`found`/`not_found`), `404`, `503 patient_registry_unavailable` ו-`504` (שתיהן `technical_failure`); `400`, `401` ו-`503 service_unavailable` אינם נרשמים.
+
 ## בדיקת המטופל מול מרשם המטופלים
 
 כאשר `PATIENT_REGISTRY_URL` מוגדר (ברירת המחדל ב-`compose.yaml`), כל מזהה מטופל נבדק תחילה מול טבלת `patients` של Hospital Agent, בקריאה בלבד דרך התפקיד `hospital_reader`:
