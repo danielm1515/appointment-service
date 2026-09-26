@@ -52,9 +52,11 @@ curl -i \
   "http://localhost:8080/api/v1/patients/P-10041/appointments?from=2026-10-01T00:00:00%2B03:00&to=2027-01-01T00:00:00%2B02:00"
 ```
 
-תוצאה צפויה: `200` עם `appointments` (מסודר לפי `appointment_at`, מהמוקדם למאוחר) ו-`truncated`. `from` ו-`to` הם חובה, זמן ISO עם אזור זמן (בלעדיו: `400`), כאשר `from` נכלל בטווח ו-`to` לא (`from <= appointment_at < to`), והפרש שביניהם עד 366 יום. הרשימה כוללת גם תורים שבוטלו (`Cancelled`) - עובדה שהמטופל צריך לראות - ולא רק תורים מתוכננים. הרשימה מוגבלת ל-100 שורות; כשיש יותר, `truncated=true` והשורה ה-101 ואילך אינן מוחזרות.
+תוצאה צפויה: `200` עם `appointments` (מסודר לפי `appointment_at`, מהמוקדם למאוחר, ובאותו זמן בדיוק - לפי `appointment_id`) ו-`truncated`. `from` ו-`to` הם חובה, זמן ISO עם אזור זמן (בלעדיו: `400`), כאשר `from` נכלל בטווח ו-`to` לא (`from <= appointment_at < to`), והפרש שביניהם עד 366 יום (כולל). הרשימה כוללת גם תורים שבוטלו (`Cancelled`) - עובדה שהמטופל צריך לראות - ולא רק תורים מתוכננים. הרשימה מוגבלת ל-100 שורות; כשיש יותר, `truncated=true` והשורה ה-101 ואילך אינן מוחזרות.
 
-קודי שגיאה: `400 validation_error` (טווח לא תקין - זמן בלי אזור זמן, `from >= to` או הפרש מעל 366 יום), `401 unauthorized` (מפתח API חסר או שגוי), `404 patient_not_found` ו-`503 patient_registry_unavailable` (כמו ב-`CheckAppointment`, ראו "בדיקת המטופל מול מרשם המטופלים"), `504 timeout` (הדמיית timeout, ראו "הדמיית timeout"). כל קריאה נרשמת ב-`appointment_audit_logs` עם `operation=ListAppointments`.
+ההשוואה לטווח נעשית אחרי המרה לשעון ישראל (השורות שמורות כשעון ישראל מקומי בלי אזור זמן, בדיוק כמו ב-`CheckAppointment`), כך ש-`from`/`to` אפשר לשלוח בכל אזור זמן (למשל UTC) והשירות ממיר אותם לפני ההשוואה. השעה שבה שעון הקיץ חוזר לשעון חורף הופכת שעה מקומית אחת בשנה לדו-משמעית; טווח שנופל בתוכה עלול לפספס תור שנקבע בה - מגבלה ידועה ומקובלת.
+
+קודי שגיאה: `400 validation_error` - `from`/`to` חסרים, לא ניתנים לפענוח כתאריך, בלי אזור זמן, `from >= to`, הפרש מעל 366 יום, או `patient_id` שאינו תואם את התבנית הנדרשת. `401 unauthorized` - מפתח API חסר או שגוי. `404 patient_not_found` ו-`503 patient_registry_unavailable` - כמו ב-`CheckAppointment` (ראו "בדיקת המטופל מול מרשם המטופלים"). `503 service_unavailable` - תקלת מסד נתונים. `504 timeout` - הדמיית timeout (ראו "הדמיית timeout"). ל-`appointment_audit_logs` (`operation=ListAppointments`) נרשמות רק התוצאות שקיבלו החלטה על המטופל או על התור: `200` (`found`/`not_found`), `404`, `503 patient_registry_unavailable` ו-`504` (שתיהן `technical_failure`); `400`, `401` ו-`503 service_unavailable` אינם נרשמים.
 
 ## בדיקת המטופל מול מרשם המטופלים
 

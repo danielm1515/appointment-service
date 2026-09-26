@@ -892,7 +892,10 @@ def create_app(
     ) -> AppointmentList | JSONResponse:
         """Every appointment of the patient (Scheduled and Cancelled) with from <= at < to, oldest
         first, at most MAX_LIST (then truncated). The rows hold Israel wall-clock time without an
-        offset (AppointmentOut._israel_time), so the window is compared in that zone."""
+        offset (AppointmentOut._israel_time), so the window is compared in that zone (from/to may
+        be sent in any timezone; they are converted here). The DST fall-back hour makes that
+        local wall-clock time ambiguous for one hour a year; a window that falls inside it may
+        miss a row stored during it - accepted."""
         if api_auth and (
             not api_key_value
             or not supplied_api_key
@@ -904,6 +907,14 @@ def create_app(
                 headers={"WWW-Authenticate": "ApiKey"},
             )
         if start.tzinfo is None or end.tzinfo is None or not start < end or end - start > MAX_LIST_WINDOW:
+            return JSONResponse(status_code=400, content={"error": "validation_error",
+                                "message": "from and to must be timezone-aware, from < to, at most 366 days apart"})
+        try:
+            # A year near 0001 or 9999 passes the checks above but overflows datetime's own
+            # range once converted to Israel time (e.g. year 1 minus a few hours of offset).
+            low = start.astimezone(ISRAEL).replace(tzinfo=None)
+            high = end.astimezone(ISRAEL).replace(tzinfo=None)
+        except (OverflowError, ValueError):
             return JSONResponse(status_code=400, content={"error": "validation_error",
                                 "message": "from and to must be timezone-aware, from < to, at most 366 days apart"})
         started = time.perf_counter()
@@ -921,8 +932,6 @@ def create_app(
                                             operation="ListAppointments")
                 if refusal is not None:
                     return refusal
-                low = start.astimezone(ISRAEL).replace(tzinfo=None)
-                high = end.astimezone(ISRAEL).replace(tzinfo=None)
                 rows = session.scalars(
                     select(Appointment)
                     .where(Appointment.patient_id == patient_id,

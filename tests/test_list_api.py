@@ -162,4 +162,136 @@ def test_each_call_writes_a_list_audit_row(tmp_path):
         with app.state.SessionLocal() as s:
             rows = s.scalars(select(AuditLog).where(AuditLog.operation == "ListAppointments")
                              .order_by(AuditLog.timestamp)).all()
-    assert [r.result for r in rows] == ["found", "not_found"]
+    # Compared as sets, not the call order: sqlite's default timestamp resolution can tie two
+    # rows written within the same test, making an order-sensitive comparison flaky (M7).
+    assert sorted(r.result for r in rows) == sorted(["found", "not_found"])
+
+
+def last_audit(app):
+    with app.state.SessionLocal() as s:
+        row = s.scalars(select(AuditLog).order_by(AuditLog.timestamp.desc())).first()
+        return (row.operation, row.result)
+
+
+def test_a_year_0001_window_is_400_not_a_crash(tmp_path):
+    """I1: from/to close to datetime's own range limits pass the from<to/366-day checks, but
+    converting them to Israel time can overflow past year 1 - that must be a 400, not a 500."""
+    _app, client = make(tmp_path)
+    with client:
+        response = client.get(URL.format("P-10041"), headers=KEY,
+                              params={"from": "0001-01-01T00:00:00+05:00",
+                                      "to": "0001-01-02T00:00:00+05:00"})
+    assert (response.status_code, response.json()["error"]) == (400, "validation_error")
+
+
+def test_a_year_9999_window_is_400_not_a_crash(tmp_path):
+    """I1: the same overflow, the other direction (past year 9999)."""
+    _app, client = make(tmp_path)
+    with client:
+        response = client.get(URL.format("P-10041"), headers=KEY,
+                              params={"from": "9999-12-30T23:00:00-12:00",
+                                      "to": "9999-12-31T23:00:00-12:00"})
+    assert (response.status_code, response.json()["error"]) == (400, "validation_error")
+
+
+def test_the_window_is_compared_in_israel_time_not_the_senders_zone(tmp_path):
+    """I2: APT-8391 is 2026-10-03T10:30 Israel time = 07:30 UTC. A UTC window must be converted
+    before comparison, not compared as naive values."""
+    _app, client = make(tmp_path)
+    with client:
+        found = client.get(URL.format("P-10041"), headers=KEY,
+                           params={"from": "2026-10-03T07:30:00+00:00",
+                                   "to": "2026-10-03T07:31:00+00:00"}).json()
+        not_found = client.get(URL.format("P-10041"), headers=KEY,
+                               params={"from": "2026-10-03T07:00:00+00:00",
+                                       "to": "2026-10-03T07:30:00+00:00"}).json()
+    assert [a["appointment_id"] for a in found["appointments"]] == ["APT-8391"]
+    assert not_found["appointments"] == []
+
+
+def test_a_winter_utc_window_finds_the_winter_appointment(tmp_path):
+    """I2: 2026-12-01T09:00 Israel winter time (+02:00) is 07:00 UTC."""
+    app, client = make(tmp_path)
+    with client:
+        add(app, "APT-W", datetime(2026, 12, 1, 9, 0, tzinfo=IL))
+        body = client.get(URL.format("P-10041"), headers=KEY,
+                          params={"from": "2026-12-01T07:00:00+00:00",
+                                  "to": "2026-12-01T07:01:00+00:00"}).json()
+    assert [a["appointment_id"] for a in body["appointments"]] == ["APT-W"]
+
+
+def test_a_reversed_window_without_a_key_is_still_401(tmp_path):
+    """M4: auth is checked before the window is, so a bad window never leaks past a bad key."""
+    _app, client = make(tmp_path)
+    good = datetime(2026, 9, 1, tzinfo=IL)
+    with client:
+        response = client.get(URL.format("P-10041"), params=window(good + timedelta(days=1), good))
+    assert (response.status_code, response.json()["error"]) == (401, "unauthorized")
+
+
+def test_same_time_rows_tiebreak_on_appointment_id(tmp_path):
+    app, client = make(tmp_path)
+    at = datetime(2027, 2, 1, 9, 0, tzinfo=IL)
+    with client:
+        add(app, "APT-B", at)
+        add(app, "APT-A", at)
+        body = client.get(URL.format("P-10041"), headers=KEY,
+                          params=window(at, at + timedelta(minutes=1))).json()
+    assert [a["appointment_id"] for a in body["appointments"]] == ["APT-A", "APT-B"]
+
+
+def test_a_patient_id_starting_with_a_hyphen_is_400(tmp_path):
+    _app, client = make(tmp_path)
+    with client:
+        response = client.get(URL.format("-bad"), headers=KEY, params=PARAMS)
+    assert (response.status_code, response.json()["error"]) == (400, "validation_error")
+
+
+def test_exactly_100_rows_are_not_truncated(tmp_path):
+    app, client = make(tmp_path)
+    start = datetime(2027, 4, 1, 8, 0, tzinfo=IL)
+    with client:
+        for i in range(100):
+            add(app, f"APT-X{i:03d}", start + timedelta(hours=i))
+        body = client.get(URL.format("P-10041"), headers=KEY,
+                          params=window(start, start + timedelta(days=30))).json()
+    assert len(body["appointments"]) == 100 and body["truncated"] is False
+
+
+def test_exactly_366_days_apart_is_allowed(tmp_path):
+    _app, client = make(tmp_path)
+    good = datetime(2026, 9, 1, tzinfo=IL)
+    with client:
+        response = client.get(URL.format("P-10041"), headers=KEY,
+                              params=window(good, good + timedelta(days=366)))
+    assert response.status_code == 200
+
+
+def test_list_route_404_is_audited_as_list_appointments(tmp_path):
+    app, client = make(tmp_path, FakeRegistry(known=("P-20000",)))
+    with client:
+        client.get(URL.format("P-10041"), headers=KEY, params=PARAMS)
+    assert last_audit(app) == ("ListAppointments", "patient_not_found")
+
+
+def test_list_route_503_registry_is_audited_as_list_appointments(tmp_path):
+    app, client = make(tmp_path, FakeRegistry(down=True))
+    with client:
+        client.get(URL.format("P-10041"), headers=KEY, params=PARAMS)
+    assert last_audit(app) == ("ListAppointments", "technical_failure")
+
+
+def test_list_route_504_is_audited_as_list_appointments(tmp_path):
+    app, client = make(tmp_path)
+    with client:
+        client.get(URL.format("P-TIMEOUT"), headers=KEY,
+                   params=window(datetime(2026, 9, 1, tzinfo=IL), datetime(2026, 10, 1, tzinfo=IL)))
+    assert last_audit(app) == ("ListAppointments", "technical_failure")
+
+
+def test_a_check_appointment_registry_404_is_audited_as_check_appointment(tmp_path):
+    app, client = make(tmp_path, FakeRegistry(known=("P-20000",)))
+    with client:
+        response = client.get("/api/v1/patients/P-10041/appointment", headers=KEY)
+    assert response.status_code == 404
+    assert last_audit(app) == ("CheckAppointment", "patient_not_found")
