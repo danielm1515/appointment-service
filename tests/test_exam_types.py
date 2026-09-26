@@ -139,7 +139,8 @@ def test_a_changed_catalog_row_is_upserted_on_the_next_start(tmp_path, monkeypat
     import dataclasses
     from app import main as app_main
     changed = tuple(
-        dataclasses.replace(e, label="תווית חדשה לבדיקה", instruction_title="כותרת חדשה")
+        dataclasses.replace(e, label="תווית חדשה לבדיקה", instruction_title="כותרת חדשה",
+                            instruction_text="טקסט חדש לבדיקה")
         if e.code == "CARD_ECHO" else e
         for e in EXAM_TYPES
     )
@@ -151,6 +152,7 @@ def test_a_changed_catalog_row_is_upserted_on_the_next_start(tmp_path, monkeypat
             row = session.get(ExamTypeRow, "CARD_ECHO")
     assert row.label_he == "תווית חדשה לבדיקה"
     assert row.instruction_title == "כותרת חדשה"
+    assert row.instruction_text == "טקסט חדש לבדיקה"
 
 
 # --- the backfill (design D2) ---------------------------------------------------------------
