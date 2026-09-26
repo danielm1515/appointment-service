@@ -162,7 +162,7 @@ def test_each_call_writes_a_list_audit_row(tmp_path):
         with app.state.SessionLocal() as s:
             rows = s.scalars(select(AuditLog).where(AuditLog.operation == "ListAppointments")
                              .order_by(AuditLog.timestamp)).all()
-    # Compared as sets, not the call order: sqlite's default timestamp resolution can tie two
+    # Compared sorted, not in call order: sqlite's default timestamp resolution can tie two
     # rows written within the same test, making an order-sensitive comparison flaky (M7).
     assert sorted(r.result for r in rows) == sorted(["found", "not_found"])
 

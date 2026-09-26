@@ -916,7 +916,7 @@ def create_app(
             high = end.astimezone(ISRAEL).replace(tzinfo=None)
         except (OverflowError, ValueError):
             return JSONResponse(status_code=400, content={"error": "validation_error",
-                                "message": "from and to must be timezone-aware, from < to, at most 366 days apart"})
+                                "message": "from and to are outside the supported date range"})
         started = time.perf_counter()
         case_id = (x_case_id or str(uuid4()))[:128]
         execution_id = (x_execution_id or str(uuid4()))[:128]
