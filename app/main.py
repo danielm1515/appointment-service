@@ -58,6 +58,11 @@ STATUS_LABELS = {"Scheduled": "מתוכנן", "Cancelled": "בוטל"}
 ISRAEL = ZoneInfo("Asia/Jerusalem")
 MAX_LIST = 100
 MAX_LIST_WINDOW = timedelta(days=366)
+# upcoming_count counts the patient's Scheduled appointments in (now, now + UPCOMING_WINDOW) -
+# the same 90 days the hospital-agent's appointment picker offers (NewRequest.tsx PICKER_DAYS,
+# design D5). The two are coupled: the agent's message says "you have other appointments" when
+# this is above 1, so it must count only appointments the patient could actually pick.
+UPCOMING_WINDOW = timedelta(days=90)
 
 
 class SimulatedTimeout(Exception):
@@ -937,6 +942,7 @@ def create_app(
                         Appointment.patient_id == patient_id,
                         Appointment.status == "Scheduled",
                         Appointment.appointment_at > now_local,
+                        Appointment.appointment_at < now_local + UPCOMING_WINDOW,
                     )
                 ) or 0
                 try:

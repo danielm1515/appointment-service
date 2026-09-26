@@ -165,14 +165,26 @@ def test_a_bad_appointment_id_pattern_is_400(tmp_path):
 
 def test_upcoming_count_counts_only_scheduled_future_appointments(tmp_path):
     app, client = make(tmp_path)
+    now = datetime.now(IL)
     with client:
-        add(app, "APT-FUTURE-1", datetime(2030, 1, 1, 9, 0, tzinfo=IL))
-        add(app, "APT-FUTURE-2", datetime(2030, 2, 1, 9, 0, tzinfo=IL))
-        add(app, "APT-PAST", datetime(2020, 1, 1, 9, 0, tzinfo=IL))
-        add(app, "APT-CANCELLED-FUTURE", datetime(2030, 3, 1, 9, 0, tzinfo=IL), status="Cancelled")
-        body = client.get("/api/v1/patients/P-10041/appointment", headers=KEY).json()
-    # APT-8391 (seeded, 2026-10-03) + the two added future ones = 3.
-    assert body["upcoming_count"] == 3
+        add(app, "APT-FUTURE-1", now + timedelta(days=10), patient_id="P-30000")
+        add(app, "APT-FUTURE-2", now + timedelta(days=40), patient_id="P-30000")
+        add(app, "APT-PAST", datetime(2020, 1, 1, 9, 0, tzinfo=IL), patient_id="P-30000")
+        add(app, "APT-CANCELLED-FUTURE", now + timedelta(days=20), status="Cancelled", patient_id="P-30000")
+        body = client.get("/api/v1/patients/P-30000/appointment", headers=KEY).json()
+    assert body["upcoming_count"] == 2
+
+
+def test_upcoming_count_is_limited_to_the_pickers_90_days(tmp_path):
+    """Final review M4: only the appointments the hospital-agent's picker offers (the next 90
+    days, NewRequest.tsx PICKER_DAYS) count - one inside the window, one beyond it: 1."""
+    app, client = make(tmp_path)
+    now = datetime.now(IL)
+    with client:
+        add(app, "APT-IN-WINDOW", now + timedelta(days=89), patient_id="P-30000")
+        add(app, "APT-BEYOND", now + timedelta(days=91), patient_id="P-30000")
+        body = client.get("/api/v1/patients/P-30000/appointment", headers=KEY).json()
+    assert body["upcoming_count"] == 1
 
 
 def test_upcoming_count_is_present_even_when_not_found(tmp_path):
