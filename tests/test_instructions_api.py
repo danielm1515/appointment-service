@@ -319,6 +319,20 @@ def test_a_known_source_with_the_wrong_version_is_404(tmp_path):
     assert response.json()["error"] == "instruction_not_found"
 
 
+def test_a_superseded_version_1_is_404_for_the_two_reworded_instructions(tmp_path):
+    """Design D15: INSTR-NEURO-EEG and INSTR-ORTHO-INJECTION are at version "2"; the old
+    version "1" is no longer in the catalog and is never served."""
+    app, client = make(tmp_path)
+    with client:
+        for source_id in ("INSTR-NEURO-EEG", "INSTR-ORTHO-INJECTION"):
+            old = client.get(f"/api/v1/instructions/{source_id}", headers=KEY, params={"version": "1"})
+            current = client.get(f"/api/v1/instructions/{source_id}", headers=KEY, params={"version": "2"})
+            assert old.status_code == 404, source_id
+            assert old.json()["error"] == "instruction_not_found"
+            assert current.status_code == 200, source_id
+            assert current.json()["version"] == "2"
+
+
 def test_a_missing_version_is_400_not_treated_as_found(tmp_path):
     """Fix round 1 M6: pinned to 400 - this app's global RequestValidationError handler always
     answers 400, never FastAPI's default 422, so the contract should say so exactly."""
