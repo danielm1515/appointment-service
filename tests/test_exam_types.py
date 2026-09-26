@@ -68,10 +68,17 @@ def test_every_exams_department_and_documents_are_in_the_catalogs():
         assert set(exam.documents) <= catalog.DOCUMENT_TYPE_CODES, exam.code
 
 
+# The two texts the live Safety check rated HighRisk were reworded into purely logistical text
+# and bumped to version "2" (design D15); the other 11 stay at version "1".
+_VERSION_2_EXAMS = frozenset({"NEURO_EEG", "ORTHO_INJECTION"})
+
+
 def test_every_instruction_id_and_version_follow_the_rule():
     for exam in EXAM_TYPES:
         assert exam.instruction_id == "INSTR-" + exam.code.replace("_", "-")
-        assert exam.instruction_version == "1"
+        expected = "2" if exam.code in _VERSION_2_EXAMS else "1"
+        assert exam.instruction_version == expected, exam.code
+    assert sum(e.instruction_version == "1" for e in EXAM_TYPES) == 11
 
 
 def test_every_instruction_text_ends_with_the_disclaimer():
@@ -139,8 +146,8 @@ def test_a_changed_catalog_row_is_upserted_on_the_next_start(tmp_path, monkeypat
     import dataclasses
     from app import main as app_main
     changed = tuple(
-        dataclasses.replace(e, label="תווית חדשה לבדיקה", instruction_title="כותרת חדשה",
-                            instruction_text="טקסט חדש לבדיקה")
+        dataclasses.replace(e, label="תווית חדשה לבדיקה", instruction_version="7",
+                            instruction_title="כותרת חדשה", instruction_text="טקסט חדש לבדיקה")
         if e.code == "CARD_ECHO" else e
         for e in EXAM_TYPES
     )
@@ -151,8 +158,32 @@ def test_a_changed_catalog_row_is_upserted_on_the_next_start(tmp_path, monkeypat
         with app2.state.SessionLocal() as session:
             row = session.get(ExamTypeRow, "CARD_ECHO")
     assert row.label_he == "תווית חדשה לבדיקה"
+    assert row.instruction_version == "7"
     assert row.instruction_title == "כותרת חדשה"
     assert row.instruction_text == "טקסט חדש לבדיקה"
+
+
+def test_a_stored_version_1_row_is_brought_to_the_catalog_version_on_start(tmp_path):
+    """A database seeded before design D15 holds NEURO_EEG and ORTHO_INJECTION at version "1"
+    with their old texts; the next start upserts both to version "2" and the reworded text."""
+    db = f"sqlite:///{(tmp_path / 'test.db').as_posix()}"
+    app1 = create_app(db, seed_demo_data=True, patient_registry=FakeRegistry())
+    with TestClient(app1):
+        with app1.state.SessionLocal() as session:
+            for code in _VERSION_2_EXAMS:
+                row = session.get(ExamTypeRow, code)
+                row.instruction_version = "1"
+                row.instruction_text = "טקסט ישן"
+            session.commit()
+
+    app2 = create_app(db, seed_demo_data=True, patient_registry=FakeRegistry())
+    with TestClient(app2):
+        with app2.state.SessionLocal() as session:
+            rows = {code: session.get(ExamTypeRow, code) for code in _VERSION_2_EXAMS}
+    for code, row in rows.items():
+        exam = next(e for e in EXAM_TYPES if e.code == code)
+        assert row.instruction_version == "2", code
+        assert row.instruction_text == exam.instruction_text, code
 
 
 # --- the backfill (design D2) ---------------------------------------------------------------
