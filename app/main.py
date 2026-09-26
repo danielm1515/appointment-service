@@ -4,7 +4,7 @@ import re
 import secrets
 import time
 from contextlib import asynccontextmanager
-from datetime import date, datetime, time as dt_time
+from datetime import date, datetime, time as dt_time, timedelta
 from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
@@ -28,7 +28,7 @@ from . import catalog
 from .config import Settings
 from .models import AdminUser, Appointment, AppointmentRequiredDocument, AuditLog, Base, DocumentTypeRow
 from .patient_registry import PatientRegistry, PostgresPatientRegistry, RegistryUnavailable
-from .schemas import AppointmentResult, ErrorResult, HealthResult
+from .schemas import AppointmentList, AppointmentResult, ErrorResult, HealthResult
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("appointment-service")
@@ -39,6 +39,9 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 CLINIC_TZ = ZoneInfo("Asia/Jerusalem")
 PATIENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 STATUS_LABELS = {"Scheduled": "מתוכנן", "Cancelled": "בוטל"}
+ISRAEL = ZoneInfo("Asia/Jerusalem")
+MAX_LIST = 100
+MAX_LIST_WINDOW = timedelta(days=366)
 
 
 class SimulatedTimeout(Exception):
@@ -163,6 +166,32 @@ def _write_audit(
     logger.info(json.dumps(event, ensure_ascii=False))
     session.add(AuditLog(audit_id=str(uuid4()), **event))
     session.commit()
+
+
+def _registry_refusal(session, registry, *, patient_id, case_id, execution_id, started, operation):
+    """The registry's verdict (design §4 of the registry design): None when the patient may be
+    served, else the 404 / 503 answer - with its audit row already written."""
+    if registry is None:
+        return None
+    try:
+        known = registry.exists(patient_id)
+    except RegistryUnavailable:
+        logger.warning("patient registry unavailable")
+        _write_audit(session, case_id=case_id, execution_id=execution_id, patient_id=patient_id,
+                     result="technical_failure", operation=operation,
+                     latency_ms=round((time.perf_counter() - started) * 1000))
+        return JSONResponse(status_code=503,
+                            content={"error": "patient_registry_unavailable",
+                                     "message": "The patient registry could not be reached"},
+                            headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id})
+    if not known:
+        _write_audit(session, case_id=case_id, execution_id=execution_id, patient_id=patient_id,
+                     result="patient_not_found", operation=operation,
+                     latency_ms=round((time.perf_counter() - started) * 1000))
+        return JSONResponse(status_code=404,
+                            content={"error": "patient_not_found", "message": "The patient is not in the registry"},
+                            headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id})
+    return None
 
 
 def create_app(
@@ -789,41 +818,12 @@ def create_app(
                 ):
                     raise SimulatedTimeout
 
-                registry = request.app.state.patient_registry
-                if registry is not None:
-                    try:
-                        known = registry.exists(patient_id)
-                    except RegistryUnavailable:
-                        logger.warning("patient registry unavailable")
-                        _write_audit(
-                            session,
-                            case_id=case_id,
-                            execution_id=execution_id,
-                            patient_id=patient_id,
-                            result="technical_failure",
-                            latency_ms=round((time.perf_counter() - started) * 1000),
-                        )
-                        return JSONResponse(
-                            status_code=503,
-                            content={"error": "patient_registry_unavailable",
-                                     "message": "The patient registry could not be reached"},
-                            headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id},
-                        )
-                    if not known:
-                        _write_audit(
-                            session,
-                            case_id=case_id,
-                            execution_id=execution_id,
-                            patient_id=patient_id,
-                            result="patient_not_found",
-                            latency_ms=round((time.perf_counter() - started) * 1000),
-                        )
-                        return JSONResponse(
-                            status_code=404,
-                            content={"error": "patient_not_found",
-                                     "message": "The patient is not in the registry"},
-                            headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id},
-                        )
+                refusal = _registry_refusal(session, request.app.state.patient_registry,
+                                            patient_id=patient_id, case_id=case_id,
+                                            execution_id=execution_id, started=started,
+                                            operation="CheckAppointment")
+                if refusal is not None:
+                    return refusal
 
                 appointment = session.scalar(
                     select(Appointment)
@@ -853,6 +853,96 @@ def create_app(
                     execution_id=execution_id,
                     patient_id=patient_id,
                     result="technical_failure",
+                    latency_ms=latency,
+                )
+                return JSONResponse(
+                    status_code=504,
+                    content={"error": "timeout", "message": "Appointment lookup timed out"},
+                    headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id},
+                )
+            except (OperationalError, SQLAlchemyError):
+                session.rollback()
+                logger.exception("Appointment database operation failed")
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "service_unavailable",
+                        "message": "Appointment service is temporarily unavailable",
+                    },
+                    headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id},
+                )
+
+    @app.get(
+        "/api/v1/patients/{patient_id}/appointments",
+        response_model=AppointmentList,
+        responses={400: {"model": ErrorResult}, 401: {"model": ErrorResult}, 404: {"model": ErrorResult},
+                   503: {"model": ErrorResult}, 504: {"model": ErrorResult}},
+        tags=["Appointments"],
+        operation_id="ListAppointments",
+    )
+    def list_appointments(
+        request: Request,
+        response: Response,
+        patient_id: str = ApiPath(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"),
+        start: datetime = Query(alias="from"),
+        end: datetime = Query(alias="to"),
+        x_case_id: str | None = Header(default=None, alias="X-Case-ID"),
+        x_execution_id: str | None = Header(default=None, alias="X-Execution-ID"),
+        supplied_api_key: str | None = Security(api_key_header),
+    ) -> AppointmentList | JSONResponse:
+        """Every appointment of the patient (Scheduled and Cancelled) with from <= at < to, oldest
+        first, at most MAX_LIST (then truncated). The rows hold Israel wall-clock time without an
+        offset (AppointmentOut._israel_time), so the window is compared in that zone."""
+        if api_auth and (
+            not api_key_value
+            or not supplied_api_key
+            or not secrets.compare_digest(supplied_api_key, api_key_value)
+        ):
+            return JSONResponse(
+                status_code=401,
+                content={"error": "unauthorized", "message": "A valid API key is required"},
+                headers={"WWW-Authenticate": "ApiKey"},
+            )
+        if start.tzinfo is None or end.tzinfo is None or not start < end or end - start > MAX_LIST_WINDOW:
+            return JSONResponse(status_code=400, content={"error": "validation_error",
+                                "message": "from and to must be timezone-aware, from < to, at most 366 days apart"})
+        started = time.perf_counter()
+        case_id = (x_case_id or str(uuid4()))[:128]
+        execution_id = (x_execution_id or str(uuid4()))[:128]
+        response.headers["X-Case-ID"] = case_id
+        response.headers["X-Execution-ID"] = execution_id
+        with request.app.state.SessionLocal() as session:
+            try:
+                cfg: Settings = request.app.state.settings
+                if cfg.enable_failure_simulation and patient_id == cfg.mock_timeout_patient_id:
+                    raise SimulatedTimeout
+                refusal = _registry_refusal(session, request.app.state.patient_registry, patient_id=patient_id,
+                                            case_id=case_id, execution_id=execution_id, started=started,
+                                            operation="ListAppointments")
+                if refusal is not None:
+                    return refusal
+                low = start.astimezone(ISRAEL).replace(tzinfo=None)
+                high = end.astimezone(ISRAEL).replace(tzinfo=None)
+                rows = session.scalars(
+                    select(Appointment)
+                    .where(Appointment.patient_id == patient_id,
+                           Appointment.appointment_at >= low, Appointment.appointment_at < high)
+                    .order_by(Appointment.appointment_at.asc(), Appointment.appointment_id.asc())
+                    .limit(MAX_LIST + 1)
+                ).all()
+                _write_audit(session, case_id=case_id, execution_id=execution_id, patient_id=patient_id,
+                             result="found" if rows else "not_found", operation="ListAppointments",
+                             latency_ms=round((time.perf_counter() - started) * 1000))
+                return AppointmentList(appointments=rows[:MAX_LIST], truncated=len(rows) > MAX_LIST)
+            except SimulatedTimeout:
+                latency = round((time.perf_counter() - started) * 1000)
+                _write_audit(
+                    session,
+                    case_id=case_id,
+                    execution_id=execution_id,
+                    patient_id=patient_id,
+                    result="technical_failure",
+                    operation="ListAppointments",
                     latency_ms=latency,
                 )
                 return JSONResponse(

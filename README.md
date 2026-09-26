@@ -44,6 +44,18 @@ curl -i -H "X-API-Key: local-development-api-key" http://localhost:8080/api/v1/p
 
 תוצאה צפויה: `200`, ‏`found=true` והתור `APT-8392`. התשובה כוללת גם `required_documents` (ראו "קביעת וביטול תורים בממשק").
 
+## רשימת התורים של מטופל
+
+```bash
+curl -i \
+  -H "X-API-Key: local-development-api-key" \
+  "http://localhost:8080/api/v1/patients/P-10041/appointments?from=2026-10-01T00:00:00%2B03:00&to=2027-01-01T00:00:00%2B02:00"
+```
+
+תוצאה צפויה: `200` עם `appointments` (מסודר לפי `appointment_at`, מהמוקדם למאוחר) ו-`truncated`. `from` ו-`to` הם חובה, זמן ISO עם אזור זמן (בלעדיו: `400`), כאשר `from` נכלל בטווח ו-`to` לא (`from <= appointment_at < to`), והפרש שביניהם עד 366 יום. הרשימה כוללת גם תורים שבוטלו (`Cancelled`) - עובדה שהמטופל צריך לראות - ולא רק תורים מתוכננים. הרשימה מוגבלת ל-100 שורות; כשיש יותר, `truncated=true` והשורה ה-101 ואילך אינן מוחזרות.
+
+קודי שגיאה: `400 validation_error` (טווח לא תקין - זמן בלי אזור זמן, `from >= to` או הפרש מעל 366 יום), `401 unauthorized` (מפתח API חסר או שגוי), `404 patient_not_found` ו-`503 patient_registry_unavailable` (כמו ב-`CheckAppointment`, ראו "בדיקת המטופל מול מרשם המטופלים"), `504 timeout` (הדמיית timeout, ראו "הדמיית timeout"). כל קריאה נרשמת ב-`appointment_audit_logs` עם `operation=ListAppointments`.
+
 ## בדיקת המטופל מול מרשם המטופלים
 
 כאשר `PATIENT_REGISTRY_URL` מוגדר (ברירת המחדל ב-`compose.yaml`), כל מזהה מטופל נבדק תחילה מול טבלת `patients` של Hospital Agent, בקריאה בלבד דרך התפקיד `hospital_reader`:
