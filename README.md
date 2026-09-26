@@ -44,7 +44,7 @@ curl -i -H "X-API-Key: local-development-api-key" http://localhost:8080/api/v1/p
 
 תוצאה צפויה: `200`, ‏`found=true` והתור `APT-8392`. התשובה כוללת גם `required_documents` (ראו "קביעת וביטול תורים בממשק").
 
-התשובה כוללת גם `exam_type` (`{code, label}`) ו-`instruction` (`{source_id, version, title}`, בלי הטקסט עצמו) - אף פעם לא ריקים: אלה של סוג הבדיקה המקושר לתור, ובהיעדר קישור (תור שנקבע לפני שהיה קטלוג סוגי בדיקה) - ברירת המחדל של המחלקה. אפשר גם לבקש תור מסוים של אותו מטופל, עם `?appointment_id=`: מוחזר רק אם הוא של המטופל הזה ומצבו `Scheduled` - לעולם לא תור של מטופל אחר, ואם לא - `found=false`, בדיוק כמו מטופל בלי תורים. התשובה כוללת גם `upcoming_count` - מספר התורים המתוכננים והעתידיים של המטופל, בלי קשר לפרמטר:
+התשובה כוללת גם `exam_type` (`{code, label}`) ו-`instruction` (`{source_id, version, title}`, בלי הטקסט עצמו) - אף פעם לא ריקים: אלה של סוג הבדיקה המקושר לתור, ובהיעדר קישור (תור שנקבע לפני שהיה קטלוג סוגי בדיקה) - ברירת המחדל של המחלקה. תור שהמחלקה שלו (או סוג הבדיקה המקושר אליו) אינם בקטלוג - מצב שאינו אמור לקרות, אך אינו נבדק בזמן השמירה בכל נתיב - מוחזר כ-`503 service_unavailable` (עם שורת Audit), ולעולם לא כברירת מחדל מומצאת ולעולם לא כ-`500`. אפשר גם לבקש תור מסוים של אותו מטופל, עם `?appointment_id=`: מוחזר רק אם הוא של המטופל הזה ומצבו `Scheduled` - לעולם לא תור של מטופל אחר, ואם לא - `found=false`, בדיוק כמו מטופל בלי תורים. שימו לב: תור שנבחר כך מוחזר גם אם מועדו כבר חלף (כל עוד מצבו עדיין `Scheduled`) - השירות בודק שייכות וסטטוס בלבד, לא זמן; הדחייה של תור שחלף מועדו היא באחריות ה-agent הקורא. התשובה כוללת גם `upcoming_count` - מספר התורים המתוכננים והעתידיים של המטופל, בלי קשר לפרמטר:
 
 ```bash
 curl -i -H "X-API-Key: local-development-api-key" \
@@ -58,7 +58,7 @@ curl -i -H "X-API-Key: local-development-api-key" \
   "http://localhost:8080/api/v1/instructions/INSTR-CARD-ECHO?version=1"
 ```
 
-תוצאה צפויה: `200` עם `{source_id, version, title, text}`. מזהה או גרסה שאינם קיימים בקטלוג (`app/catalog.py`): `404` עם `{"error": "instruction_not_found"}` בלבד (בלי `message`). הקריאה אינה מקבלת ואינה בודקת שום פרט על המטופל (עיצוב §11) - אותו מפתח API כמו שאר ה-API, ונרשמת ב-`appointment_audit_logs` עם `operation=GetInstruction` ו-`patient_id` ריק (העמודה עצמה אינה מאפשרת `NULL`).
+תוצאה צפויה: `200` עם `{source_id, version, title, text}`. מזהה או גרסה שאינם קיימים בקטלוג (`app/catalog.py`): `404` עם `{"error": "instruction_not_found"}` בלבד (בלי `message`). הקריאה אינה מקבלת ואינה בודקת שום פרט על המטופל (מפרט §11) - אותו מפתח API כמו שאר ה-API, ונרשמת ב-`appointment_audit_logs` עם `operation=GetInstruction` ו-`patient_id` ריק (העמודה עצמה אינה מאפשרת `NULL`).
 
 ## רשימת התורים של מטופל
 
@@ -68,11 +68,11 @@ curl -i \
   "http://localhost:8080/api/v1/patients/P-10041/appointments?from=2026-10-01T00:00:00%2B03:00&to=2027-01-01T00:00:00%2B02:00"
 ```
 
-תוצאה צפויה: `200` עם `appointments` (מסודר לפי `appointment_at`, מהמוקדם למאוחר, ובאותו זמן בדיוק - לפי `appointment_id`) ו-`truncated`. `from` ו-`to` הם חובה, זמן ISO עם אזור זמן (בלעדיו: `400`), כאשר `from` נכלל בטווח ו-`to` לא (`from <= appointment_at < to`), והפרש שביניהם עד 366 יום (כולל). הרשימה כוללת גם תורים שבוטלו (`Cancelled`) - עובדה שהמטופל צריך לראות - ולא רק תורים מתוכננים. הרשימה מוגבלת ל-100 שורות; כשיש יותר, `truncated=true` והשורה ה-101 ואילך אינן מוחזרות.
+תוצאה צפויה: `200` עם `appointments` (מסודר לפי `appointment_at`, מהמוקדם למאוחר, ובאותו זמן בדיוק - לפי `appointment_id`) ו-`truncated`. `from` ו-`to` הם חובה, זמן ISO עם אזור זמן (בלעדיו: `400`), כאשר `from` נכלל בטווח ו-`to` לא (`from <= appointment_at < to`), והפרש שביניהם עד 366 יום (כולל). הרשימה כוללת גם תורים שבוטלו (`Cancelled`) - עובדה שהמטופל צריך לראות - ולא רק תורים מתוכננים. הרשימה מוגבלת ל-100 שורות; כשיש יותר, `truncated=true` והשורה ה-101 ואילך אינן מוחזרות. כל שורה כוללת גם `exam_type` ו-`instruction`, בדיוק כמו ב-`CheckAppointment` (ראו למעלה) - סוג הבדיקה המקושר לאותו תור, או ברירת המחדל של מחלקתו.
 
 ההשוואה לטווח נעשית אחרי המרה לשעון ישראל (השורות שמורות כשעון ישראל מקומי בלי אזור זמן, בדיוק כמו ב-`CheckAppointment`), כך ש-`from`/`to` אפשר לשלוח בכל אזור זמן (למשל UTC) והשירות ממיר אותם לפני ההשוואה. השעה שבה שעון הקיץ חוזר לשעון חורף הופכת שעה מקומית אחת בשנה לדו-משמעית; טווח שנופל בתוכה עלול לפספס תור שנקבע בה - מגבלה ידועה ומקובלת.
 
-קודי שגיאה: `400 validation_error` - `from`/`to` חסרים, לא ניתנים לפענוח כתאריך, בלי אזור זמן, `from >= to`, הפרש מעל 366 יום, או `patient_id` שאינו תואם את התבנית הנדרשת. `401 unauthorized` - מפתח API חסר או שגוי. `404 patient_not_found` ו-`503 patient_registry_unavailable` - כמו ב-`CheckAppointment` (ראו "בדיקת המטופל מול מרשם המטופלים"). `503 service_unavailable` - תקלת מסד נתונים. `504 timeout` - הדמיית timeout (ראו "הדמיית timeout"). ל-`appointment_audit_logs` (`operation=ListAppointments`) נרשמות רק התוצאות שקיבלו החלטה על המטופל או על התור: `200` (`found`/`not_found`), `404`, `503 patient_registry_unavailable` ו-`504` (שתיהן `technical_failure`); `400`, `401` ו-`503 service_unavailable` אינם נרשמים.
+קודי שגיאה: `400 validation_error` - `from`/`to` חסרים, לא ניתנים לפענוח כתאריך, בלי אזור זמן, `from >= to`, הפרש מעל 366 יום, או `patient_id` שאינו תואם את התבנית הנדרשת. `401 unauthorized` - מפתח API חסר או שגוי. `404 patient_not_found` ו-`503 patient_registry_unavailable` - כמו ב-`CheckAppointment` (ראו "בדיקת המטופל מול מרשם המטופלים"). `504 timeout` - הדמיית timeout (ראו "הדמיית timeout"). `503 service_unavailable` מכסה שני מקרים שונים: תקלת מסד נתונים (לא נרשמת ב-Audit), או שורה שהמחלקה שלה - או סוג הבדיקה המקושר אליה - אינם בקטלוג (`app/catalog.py`); המקרה השני כן נרשם, כ-`technical_failure` (fail-closed: לעולם לא ברירת מחדל מומצאת ולעולם לא `500`). ל-`appointment_audit_logs` (`operation=ListAppointments`) נרשמות רק התוצאות שקיבלו החלטה על המטופל או על התור: `200` (`found`/`not_found`), `404`, `503 patient_registry_unavailable`, `503` בשל אי-התאמת קטלוג, ו-`504` (שלושתם `technical_failure` פרט ל-`patient_not_found`); `400`, `401` ו-`503 service_unavailable` בשל תקלת מסד נתונים אינם נרשמים.
 
 ## בדיקת המטופל מול מרשם המטופלים
 

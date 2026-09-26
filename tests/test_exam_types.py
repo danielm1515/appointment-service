@@ -92,6 +92,18 @@ def test_exam_type_label_falls_back_to_the_code():
     assert catalog.exam_type_label("UNKNOWN") == "UNKNOWN"
 
 
+def test_card_stress_suggests_ecg():
+    """Fix round 1 M6: pin the one exam whose suggested documents are asserted by code."""
+    assert EXAMS_BY_CODE["CARD_STRESS"].documents == ("ECG",)
+
+
+def test_these_three_exams_suggest_no_documents():
+    """Fix round 1 M7: CARD_HOLTER, NEURO_EMG and ORTHO_INJECTION no longer pre-tick anything -
+    their §4 summaries don't point at any of the 5 catalog document types clearly enough."""
+    for code in ("CARD_HOLTER", "NEURO_EMG", "ORTHO_INJECTION"):
+        assert EXAMS_BY_CODE[code].documents == (), code
+
+
 # --- the exam_types table (upserted every start, like document_types) ----------------------
 
 def test_the_exam_type_table_is_seeded_on_every_start_even_without_demo_data(tmp_path):
@@ -116,6 +128,31 @@ def test_seeding_the_exam_types_twice_changes_nothing(tmp_path):
         assert session.scalar(text("SELECT count(*) FROM exam_types")) == 13
 
 
+def test_a_changed_catalog_row_is_upserted_on_the_next_start(tmp_path, monkeypatch):
+    """The update branch of _seed_exam_types (M6): an existing row is brought in line with a
+    changed app/catalog.py, not just inserted once and left alone."""
+    db = f"sqlite:///{(tmp_path / 'test.db').as_posix()}"
+    app1 = create_app(db, seed_demo_data=True, patient_registry=FakeRegistry())
+    with TestClient(app1):
+        pass
+
+    import dataclasses
+    from app import main as app_main
+    changed = tuple(
+        dataclasses.replace(e, label="תווית חדשה לבדיקה", instruction_title="כותרת חדשה")
+        if e.code == "CARD_ECHO" else e
+        for e in EXAM_TYPES
+    )
+    monkeypatch.setattr(app_main.catalog, "EXAM_TYPES", changed)
+
+    app2 = create_app(db, seed_demo_data=True, patient_registry=FakeRegistry())
+    with TestClient(app2):
+        with app2.state.SessionLocal() as session:
+            row = session.get(ExamTypeRow, "CARD_ECHO")
+    assert row.label_he == "תווית חדשה לבדיקה"
+    assert row.instruction_title == "כותרת חדשה"
+
+
 # --- the backfill (design D2) ---------------------------------------------------------------
 
 def test_the_two_demo_appointments_are_backfilled(tmp_path):
@@ -136,6 +173,27 @@ def test_backfill_never_overwrites_an_exam_type_already_set(tmp_path):
     app2, client2 = make_client(tmp_path)  # re-open the same database
     with client2:
         assert exam_code_of(app2, "APT-8391") == "NEURO_EEG"
+
+
+def test_backfill_skips_an_appointment_moved_to_another_department(tmp_path):
+    """Fix round 1 I1: an old-schema APT-8391 that was moved to Cardiology before this service
+    ever ran must not be linked to NEURO_VISIT - that would misdescribe a cardiology
+    appointment as a neurology one. It stays unlinked and resolves to its own department's
+    default (CARD_VISIT) instead."""
+    import sqlite3
+    db = tmp_path / "moved.db"
+    with sqlite3.connect(db) as conn:
+        conn.executescript("""
+            CREATE TABLE appointments (appointment_id VARCHAR(64) PRIMARY KEY, patient_id VARCHAR(64) NOT NULL,
+                department VARCHAR(120) NOT NULL, doctor_name VARCHAR(120), appointment_at DATETIME NOT NULL,
+                location VARCHAR(200), status VARCHAR(32) NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL);
+            INSERT INTO appointments (appointment_id, patient_id, department, appointment_at, status)
+                VALUES ('APT-8391', 'P-10041', 'Cardiology', '2026-10-03 10:30:00', 'Scheduled');
+        """)
+    app = create_app(f"sqlite:///{db.as_posix()}", seed_demo_data=True, patient_registry=FakeRegistry())
+    with TestClient(app):
+        assert exam_code_of(app, "APT-8391") is None
 
 
 def test_an_appointment_with_no_exam_link_reports_none(tmp_path):
@@ -183,12 +241,49 @@ def test_the_form_offers_every_exam_type_grouped_by_department(tmp_path):
     app, client = make_client(tmp_path)
     with client:
         page = client.get("/").text
+    select_tag = re.search(r'<select[^>]*name="exam_type"[^>]*>', page).group(0)
     select = re.search(r'<select[^>]*name="exam_type"[^>]*>(.*?)</select>', page, re.S)
     assert select, "the exam-type field must be a dropdown"
     options = re.findall(r'<option value="([^"]*)"', select.group(1))
     assert options == [""] + CODES
+    # The select itself (M6): required, and filtered by department like doctor/location.
+    assert "required" in select_tag
+    assert 'data-filter-by="book_department"' in select_tag
     for exam in EXAM_TYPES:
-        assert f'data-department="{exam.department}"' in select.group(1)
+        option = re.search(rf'<option value="{exam.code}"[^>]*>', select.group(1)).group(0)
+        assert f'data-department="{exam.department}"' in option
+        assert f'data-documents="{",".join(exam.documents)}"' in option
+
+
+def test_the_pretick_script_adds_without_unchecking_anything(tmp_path):
+    """M6, as far as a template test can (no JS runtime here): the pre-tick script must only
+    ever set a box to checked, never uncheck one - so a manually-ticked document that isn't
+    among the newly chosen exam's suggestions survives switching the exam type."""
+    app, client = make_client(tmp_path)
+    with client:
+        page = client.get("/").text
+    script = re.search(r"Choosing an exam type pre-ticks.*?</script>", page, re.S).group(0)
+    assert "box.checked = true" in script
+    assert "box.checked = false" not in script
+    assert re.search(r"required_documents.*forEach", script, re.S)
+    # It must not reset every box before applying the suggestion (that would be replace, not add).
+    assert not re.search(r"box\.checked\s*=\s*false", script)
+
+
+def test_an_unlinked_appointment_shows_its_resolved_default_on_the_dashboard(tmp_path):
+    """Fix round 1 I3: an unlinked appointment isn't blank on the dashboard - it shows the
+    department's default exam, marked as a resolved default rather than a real choice."""
+    app, client = make_client(tmp_path)
+    with client:
+        with app.state.SessionLocal() as session:
+            session.add(Appointment(appointment_id="APT-UNLINKED", patient_id="P-30000",
+                                    department="Ophthalmology", status="Scheduled",
+                                    appointment_at=datetime(2030, 1, 1, 9, 0)))
+            session.commit()
+        page = client.get("/").text
+    assert "בדיקת עיניים (ברירת מחדל)" in page  # Ophthalmology's default is OPHTH_VISIT
+    row = re.search(r"<tr><td><span class=\"id\">APT-UNLINKED.*?</tr>", page, re.S).group(0)
+    assert "(ברירת מחדל)" in row
 
 
 def test_booking_stores_the_chosen_exam_type(tmp_path):

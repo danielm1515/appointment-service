@@ -21,9 +21,23 @@ class InstructionResult(InstructionOut):
     text: str
 
 
+class ExamCatalogInconsistent(Exception):
+    """The appointment's department, or its own linked exam code, is not (or no longer) in the
+    exam-type catalog. Raised instead of silently substituting the department default (M4,
+    fix round 1) - the route must catch this and fail closed (503 service_unavailable), never
+    return a guessed answer and never a 500."""
+
+
 def _resolve_exam(department: str, exam_code: str | None):
-    exam = EXAMS_BY_CODE.get(exam_code) if exam_code else None
-    return exam if exam is not None else default_exam(department)
+    if exam_code is not None:
+        exam = EXAMS_BY_CODE.get(exam_code)
+        if exam is None:
+            raise ExamCatalogInconsistent(f"exam code {exam_code!r} is not in the catalog")
+        return exam
+    try:
+        return default_exam(department)
+    except KeyError as e:
+        raise ExamCatalogInconsistent(str(e)) from e
 
 
 class AppointmentOut(BaseModel):

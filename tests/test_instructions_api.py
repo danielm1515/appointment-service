@@ -71,6 +71,30 @@ def test_an_appointment_with_no_exam_link_resolves_to_the_department_default(tmp
     assert body["appointment"]["exam_type"]["code"] == "NEURO_VISIT"  # Neurology's default
 
 
+def test_a_non_default_linked_exam_is_reported_over_the_api(tmp_path):
+    """Fix round 1 I2: P-20000's seeded APT-8392 is linked to CARD_STRESS (not Cardiology's
+    default, CARD_VISIT) - the API must report the link, not the department default."""
+    app, client = make(tmp_path)
+    with client:
+        body = client.get("/api/v1/patients/P-20000/appointment", headers=KEY).json()
+    assert body["appointment"]["appointment_id"] == "APT-8392"
+    assert body["appointment"]["exam_type"]["code"] == "CARD_STRESS"
+    assert body["appointment"]["instruction"]["source_id"] == "INSTR-CARD-STRESS"
+
+
+def test_a_list_appointments_row_with_a_non_default_link_shows_it(tmp_path):
+    """Fix round 1 I2, the other half: ListAppointments rows go through the same AppointmentOut
+    resolution, so a non-default link must show up there too."""
+    app, client = make(tmp_path)
+    with client:
+        body = client.get("/api/v1/patients/P-20000/appointments", headers=KEY,
+                          params={"from": "2026-01-01T00:00:00+00:00", "to": "2027-01-01T00:00:00+00:00"}).json()
+    [row] = body["appointments"]
+    assert row["appointment_id"] == "APT-8392"
+    assert row["exam_type"]["code"] == "CARD_STRESS"
+    assert row["instruction"]["source_id"] == "INSTR-CARD-STRESS"
+
+
 # --- CheckAppointment's ?appointment_id= -------------------------------------------------------
 
 def test_without_the_parameter_behavior_is_unchanged(tmp_path):
@@ -158,6 +182,93 @@ def test_upcoming_count_is_present_even_when_not_found(tmp_path):
     assert body == {"found": False, "appointment": None, "upcoming_count": 0}
 
 
+def test_upcoming_count_boundary_around_now(tmp_path):
+    """Fix round 1 M6: a Scheduled appointment a few seconds in the past does not count; one a
+    few seconds in the future does - a real-clock check of the strict '>' boundary. Unequal
+    numbers of past/future rows (1 vs 2), so an inverted comparison changes the count, not just
+    which row is counted."""
+    app, client = make(tmp_path)
+    now = datetime.now(IL)
+    with client:
+        add(app, "APT-JUST-PAST", now - timedelta(seconds=20), patient_id="P-30000")
+        add(app, "APT-JUST-FUTURE-1", now + timedelta(seconds=60), patient_id="P-30000")
+        add(app, "APT-JUST-FUTURE-2", now + timedelta(seconds=90), patient_id="P-30000")
+        body = client.get("/api/v1/patients/P-30000/appointment", headers=KEY).json()
+    assert body["upcoming_count"] == 2
+
+
+# --- fail closed: a catalog inconsistency is 503, never a 500 or a silent default (M4) --------
+
+def window():
+    return {"from": "2029-12-01T00:00:00+00:00", "to": "2030-02-01T00:00:00+00:00"}
+
+
+def test_a_departmentless_appointment_is_503_on_check_appointment(tmp_path):
+    app, client = make(tmp_path)
+    with client:
+        with app.state.SessionLocal() as s:
+            s.add(Appointment(appointment_id="APT-BADDEPT", patient_id="P-30000", department="Radiology",
+                              appointment_at=datetime(2030, 1, 1, 9, 0), status="Scheduled"))
+            s.commit()
+        response = client.get("/api/v1/patients/P-30000/appointment", headers=KEY)
+    assert response.status_code == 503
+    assert response.json()["error"] == "service_unavailable"
+    assert last_audit(app)[:2] == ("CheckAppointment", "technical_failure")
+
+
+def test_a_departmentless_appointment_is_503_on_list_appointments(tmp_path):
+    app, client = make(tmp_path)
+    with client:
+        with app.state.SessionLocal() as s:
+            s.add(Appointment(appointment_id="APT-BADDEPT", patient_id="P-30000", department="Radiology",
+                              appointment_at=datetime(2030, 1, 1, 9, 0), status="Scheduled"))
+            s.commit()
+        response = client.get("/api/v1/patients/P-30000/appointments", headers=KEY, params=window())
+    assert response.status_code == 503
+    assert response.json()["error"] == "service_unavailable"
+    assert last_audit(app)[:2] == ("ListAppointments", "technical_failure")
+
+
+def _add_stale_exam_type_row(session):
+    """A DB row for an exam code that _seed_exam_types once wrote but app/catalog.py's EXAM_TYPES
+    no longer lists (it never deletes a stale row - only upserts the current ones). The FK from
+    appointment_exam_types needs this row to exist; the in-memory catalog is what must not."""
+    from app.models import ExamTypeRow
+    session.add(ExamTypeRow(code="EXAM_RETIRED", department="Cardiology", label_he="בדיקה שהוסרה",
+                            instruction_id="INSTR-EXAM-RETIRED", instruction_version="1",
+                            instruction_title="ישן", instruction_text="ישן"))
+
+
+def test_a_stale_linked_exam_code_is_503_never_a_silent_default(tmp_path):
+    """The link says EXAM_RETIRED, which used to be in the catalog and no longer is - this must
+    never quietly resolve to the department default instead (M4)."""
+    app, client = make(tmp_path)
+    with client:
+        with app.state.SessionLocal() as s:
+            _add_stale_exam_type_row(s)
+            s.add(Appointment(appointment_id="APT-STALE", patient_id="P-30000", department="Cardiology",
+                              appointment_at=datetime(2030, 1, 1, 9, 0), status="Scheduled",
+                              exam_type_link=AppointmentExamType(exam_code="EXAM_RETIRED")))
+            s.commit()
+        response = client.get("/api/v1/patients/P-30000/appointment", headers=KEY)
+    assert response.status_code == 503
+    assert response.json()["error"] == "service_unavailable"
+
+
+def test_a_stale_linked_exam_code_is_503_on_list_appointments(tmp_path):
+    app, client = make(tmp_path)
+    with client:
+        with app.state.SessionLocal() as s:
+            _add_stale_exam_type_row(s)
+            s.add(Appointment(appointment_id="APT-STALE", patient_id="P-30000", department="Cardiology",
+                              appointment_at=datetime(2030, 1, 1, 9, 0), status="Scheduled",
+                              exam_type_link=AppointmentExamType(exam_code="EXAM_RETIRED")))
+            s.commit()
+        response = client.get("/api/v1/patients/P-30000/appointments", headers=KEY, params=window())
+    assert response.status_code == 503
+    assert response.json()["error"] == "service_unavailable"
+
+
 # --- GET /api/v1/instructions/{source_id} ----------------------------------------------------
 
 def test_a_known_instruction_is_returned(tmp_path):
@@ -196,11 +307,13 @@ def test_a_known_source_with_the_wrong_version_is_404(tmp_path):
     assert response.json()["error"] == "instruction_not_found"
 
 
-def test_a_missing_version_is_422_not_treated_as_found(tmp_path):
+def test_a_missing_version_is_400_not_treated_as_found(tmp_path):
+    """Fix round 1 M6: pinned to 400 - this app's global RequestValidationError handler always
+    answers 400, never FastAPI's default 422, so the contract should say so exactly."""
     app, client = make(tmp_path)
     with client:
         response = client.get("/api/v1/instructions/INSTR-CARD-ECHO", headers=KEY)
-    assert response.status_code in (400, 422)
+    assert response.status_code == 400
 
 
 def test_a_bad_source_id_pattern_is_400(tmp_path):
@@ -217,6 +330,24 @@ def test_a_missing_or_wrong_key_is_401(tmp_path):
         wrong = client.get("/api/v1/instructions/INSTR-CARD-ECHO", params={"version": "1"},
                            headers={"X-API-Key": "nope"})
     assert missing.status_code == 401 and wrong.status_code == 401
+
+
+def test_a_db_failure_writing_the_audit_row_is_503_not_a_500(tmp_path, monkeypatch):
+    """Fix round 1 M5: GetInstruction's audit write is now under the same
+    OperationalError/SQLAlchemyError -> 503 handling as CheckAppointment/ListAppointments."""
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session as OrmSession
+
+    app, client = make(tmp_path)
+
+    def broken_commit(self, *a, **kw):
+        raise OperationalError("stmt", {}, Exception("boom"))
+
+    with client:
+        monkeypatch.setattr(OrmSession, "commit", broken_commit)
+        response = client.get("/api/v1/instructions/INSTR-CARD-ECHO", headers=KEY, params={"version": "1"})
+    assert response.status_code == 503
+    assert response.json()["error"] == "service_unavailable"
 
 
 def test_the_audit_row_has_no_patient_and_the_right_operation(tmp_path):

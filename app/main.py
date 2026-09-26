@@ -37,7 +37,14 @@ from .models import (
     ExamTypeRow,
 )
 from .patient_registry import PatientRegistry, PostgresPatientRegistry, RegistryUnavailable
-from .schemas import AppointmentList, AppointmentResult, ErrorResult, HealthResult, InstructionResult
+from .schemas import (
+    AppointmentList,
+    AppointmentResult,
+    ErrorResult,
+    ExamCatalogInconsistent,
+    HealthResult,
+    InstructionResult,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("appointment-service")
@@ -150,13 +157,30 @@ def _seed_exam_types(session: Session) -> None:
 
 def _backfill_exam_types(session: Session) -> None:
     """The two demo appointments that predate exam types get one, once (design D2): only when
-    the appointment exists and still has no exam-type link - true for a fresh seed just as much
-    as for a pre-existing database made by the old schema."""
+    the appointment exists, still has no exam-type link, and its department still matches the
+    exam's own department - true for a fresh seed just as much as for a pre-existing database
+    made by the old schema. An appointment moved to another department (fix round 1, I1) is
+    left unlinked instead, so it resolves to its own (now different) department's default."""
     for appointment_id, exam_code in (("APT-8391", "NEURO_VISIT"), ("APT-8392", "CARD_STRESS")):
         appointment = session.get(Appointment, appointment_id)
-        if appointment is not None and appointment.exam_type_link is None:
+        if (appointment is not None and appointment.exam_type_link is None
+                and appointment.department == catalog.EXAMS_BY_CODE[exam_code].department):
             session.add(AppointmentExamType(appointment_id=appointment_id, exam_code=exam_code))
     session.commit()
+
+
+def _resolved_exam_label(appointment: Appointment) -> str:
+    """What the dashboard shows for an appointment's exam type (fix round 1, I3): the linked
+    exam's own label, or - when there is no link - the department's default exam, marked as
+    such so the admin can tell a real choice from a resolved one. Never raises: an appointment
+    whose department (or linked exam code) fell out of the catalog just shows a placeholder,
+    the same fail-closed spirit as the API without crashing an internal admin page over it."""
+    if appointment.exam_code:
+        return catalog.exam_type_label(appointment.exam_code)
+    try:
+        return f"{catalog.default_exam(appointment.department).label} (ברירת מחדל)"
+    except KeyError:
+        return "לא צוין"
 
 
 def _seed(session: Session) -> None:
@@ -396,6 +420,7 @@ def create_app(
                 "document_type_label": catalog.document_type_label,
                 "exam_types": catalog.EXAM_TYPES,
                 "exam_type_label": catalog.exam_type_label,
+                "resolved_exam_label": _resolved_exam_label,
                 "time_slots": catalog.TIME_SLOTS,
                 "editing": editing,
                 "months": catalog.MONTHS,
@@ -914,6 +939,22 @@ def create_app(
                         Appointment.appointment_at > now_local,
                     )
                 ) or 0
+                try:
+                    # Resolved (and validated against the catalog) before any audit row is
+                    # written, so a catalog inconsistency never gets recorded as "found" (M4).
+                    body = AppointmentResult(found=bool(appointment), appointment=appointment,
+                                             upcoming_count=upcoming_count)
+                except ExamCatalogInconsistent:
+                    latency = round((time.perf_counter() - started) * 1000)
+                    _write_audit(session, case_id=case_id, execution_id=execution_id,
+                                patient_id=patient_id, result="technical_failure",
+                                latency_ms=latency)
+                    return JSONResponse(
+                        status_code=503,
+                        content={"error": "service_unavailable",
+                                "message": "The appointment's exam type is not in the catalog"},
+                        headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id},
+                    )
                 result = "found" if appointment else "not_found"
                 latency = round((time.perf_counter() - started) * 1000)
                 _write_audit(
@@ -924,8 +965,7 @@ def create_app(
                     result=result,
                     latency_ms=latency,
                 )
-                return AppointmentResult(found=bool(appointment), appointment=appointment,
-                                         upcoming_count=upcoming_count)
+                return body
             except SimulatedTimeout:
                 latency = round((time.perf_counter() - started) * 1000)
                 _write_audit(
@@ -1020,10 +1060,24 @@ def create_app(
                     .order_by(Appointment.appointment_at.asc(), Appointment.appointment_id.asc())
                     .limit(MAX_LIST + 1)
                 ).all()
+                try:
+                    # Resolved (and validated against the catalog) before any audit row - a
+                    # catalog inconsistency in any row must never be recorded as "found" (M4).
+                    body = AppointmentList(appointments=rows[:MAX_LIST], truncated=len(rows) > MAX_LIST)
+                except ExamCatalogInconsistent:
+                    _write_audit(session, case_id=case_id, execution_id=execution_id, patient_id=patient_id,
+                                 result="technical_failure", operation="ListAppointments",
+                                 latency_ms=round((time.perf_counter() - started) * 1000))
+                    return JSONResponse(
+                        status_code=503,
+                        content={"error": "service_unavailable",
+                                "message": "An appointment's exam type is not in the catalog"},
+                        headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id},
+                    )
                 _write_audit(session, case_id=case_id, execution_id=execution_id, patient_id=patient_id,
                              result="found" if rows else "not_found", operation="ListAppointments",
                              latency_ms=round((time.perf_counter() - started) * 1000))
-                return AppointmentList(appointments=rows[:MAX_LIST], truncated=len(rows) > MAX_LIST)
+                return body
             except SimulatedTimeout:
                 latency = round((time.perf_counter() - started) * 1000)
                 _write_audit(
@@ -1073,7 +1127,7 @@ def create_app(
         supplied_api_key: str | None = Security(api_key_header),
     ) -> InstructionResult | JSONResponse:
         """The instruction system Hospital Agent's LoadInstructions reads (design D3/D8): only
-        source_id + version, no patient field at all (design §11) - so no registry check either."""
+        source_id + version, no patient field at all (spec §11) - so no registry check either."""
         if api_auth and (
             not api_key_value
             or not supplied_api_key
@@ -1097,17 +1151,29 @@ def create_app(
         )
         result = "found" if exam else "not_found"
         with request.app.state.SessionLocal() as session:
-            # No patient in this flow (design §11): the audit row's patient_id is the empty
-            # string, since the column itself is not-null.
-            _write_audit(
-                session,
-                case_id=case_id,
-                execution_id=execution_id,
-                patient_id="",
-                result=result,
-                operation="GetInstruction",
-                latency_ms=round((time.perf_counter() - started) * 1000),
-            )
+            try:
+                # No patient in this flow (spec §11): the audit row's patient_id is the empty
+                # string, since the column itself is not-null.
+                _write_audit(
+                    session,
+                    case_id=case_id,
+                    execution_id=execution_id,
+                    patient_id="",
+                    result=result,
+                    operation="GetInstruction",
+                    latency_ms=round((time.perf_counter() - started) * 1000),
+                )
+            except (OperationalError, SQLAlchemyError):
+                session.rollback()
+                logger.exception("Appointment database operation failed")
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "service_unavailable",
+                        "message": "Appointment service is temporarily unavailable",
+                    },
+                    headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id},
+                )
         if exam is None:
             # Exactly {"error": ...} - no "message" field (the contract Hospital Agent reads).
             return JSONResponse(
