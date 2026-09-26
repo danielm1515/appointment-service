@@ -51,7 +51,7 @@ def test_a_known_patient_without_an_appointment_is_still_a_business_result(tmp_p
     with client:
         response = client.get("/api/v1/patients/P-30000/appointment")
     assert response.status_code == 200
-    assert response.json() == {"found": False, "appointment": None}
+    assert response.json() == {"found": False, "appointment": None, "upcoming_count": 0}
 
 
 def test_a_patient_the_registry_does_not_know_is_404(tmp_path):
@@ -93,7 +93,7 @@ def test_without_a_registry_the_service_behaves_as_before(tmp_path):
     with client:
         response = client.get("/api/v1/patients/P-99999/appointment")
     assert response.status_code == 200
-    assert response.json() == {"found": False, "appointment": None}
+    assert response.json() == {"found": False, "appointment": None, "upcoming_count": 0}
 
 
 def test_a_registry_url_in_the_environment_does_not_reach_the_no_registry_tests(tmp_path, monkeypatch):

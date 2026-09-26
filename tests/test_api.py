@@ -124,7 +124,7 @@ def test_missing_appointment_is_business_result(tmp_path):
     with client:
         response = client.get("/api/v1/patients/P-99999/appointment")
     assert response.status_code == 200
-    assert response.json() == {"found": False, "appointment": None}
+    assert response.json() == {"found": False, "appointment": None, "upcoming_count": 0}
 
 
 def test_invalid_patient_id(tmp_path):
@@ -155,6 +155,9 @@ def test_appointment_at_carries_israel_time_zone(tmp_path):
 def test_a_winter_appointment_gets_the_winter_offset(tmp_path):
     from datetime import datetime
     from app.schemas import AppointmentOut
-    out = AppointmentOut(appointment_id="A", patient_id="P", department="D", doctor_name=None,
+    out = AppointmentOut(appointment_id="A", patient_id="P", department="Cardiology", doctor_name=None,
                          appointment_at=datetime(2026, 12, 1, 9, 0), location=None, status="Scheduled")
     assert out.model_dump(mode="json")["appointment_at"] == "2026-12-01T09:00:00+02:00"
+    # No exam_code given: resolved to the department's default exam (design D3).
+    assert out.exam_type.code == "CARD_VISIT"
+    assert out.instruction.source_id == "INSTR-CARD-VISIT"

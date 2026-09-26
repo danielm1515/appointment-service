@@ -44,6 +44,22 @@ curl -i -H "X-API-Key: local-development-api-key" http://localhost:8080/api/v1/p
 
 תוצאה צפויה: `200`, ‏`found=true` והתור `APT-8392`. התשובה כוללת גם `required_documents` (ראו "קביעת וביטול תורים בממשק").
 
+התשובה כוללת גם `exam_type` (`{code, label}`) ו-`instruction` (`{source_id, version, title}`, בלי הטקסט עצמו) - אף פעם לא ריקים: אלה של סוג הבדיקה המקושר לתור, ובהיעדר קישור (תור שנקבע לפני שהיה קטלוג סוגי בדיקה) - ברירת המחדל של המחלקה. אפשר גם לבקש תור מסוים של אותו מטופל, עם `?appointment_id=`: מוחזר רק אם הוא של המטופל הזה ומצבו `Scheduled` - לעולם לא תור של מטופל אחר, ואם לא - `found=false`, בדיוק כמו מטופל בלי תורים. התשובה כוללת גם `upcoming_count` - מספר התורים המתוכננים והעתידיים של המטופל, בלי קשר לפרמטר:
+
+```bash
+curl -i -H "X-API-Key: local-development-api-key" \
+  "http://localhost:8080/api/v1/patients/P-10041/appointment?appointment_id=APT-8391"
+```
+
+## שליפת הוראת הכנה
+
+```bash
+curl -i -H "X-API-Key: local-development-api-key" \
+  "http://localhost:8080/api/v1/instructions/INSTR-CARD-ECHO?version=1"
+```
+
+תוצאה צפויה: `200` עם `{source_id, version, title, text}`. מזהה או גרסה שאינם קיימים בקטלוג (`app/catalog.py`): `404` עם `{"error": "instruction_not_found"}` בלבד (בלי `message`). הקריאה אינה מקבלת ואינה בודקת שום פרט על המטופל (עיצוב §11) - אותו מפתח API כמו שאר ה-API, ונרשמת ב-`appointment_audit_logs` עם `operation=GetInstruction` ו-`patient_id` ריק (העמודה עצמה אינה מאפשרת `NULL`).
+
 ## רשימת התורים של מטופל
 
 ```bash

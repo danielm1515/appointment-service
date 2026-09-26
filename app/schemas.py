@@ -1,7 +1,29 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+from .catalog import EXAMS_BY_CODE, default_exam
+
+
+class ExamTypeOut(BaseModel):
+    code: str
+    label: str
+
+
+class InstructionOut(BaseModel):
+    source_id: str
+    version: str
+    title: str
+
+
+class InstructionResult(InstructionOut):
+    text: str
+
+
+def _resolve_exam(department: str, exam_code: str | None):
+    exam = EXAMS_BY_CODE.get(exam_code) if exam_code else None
+    return exam if exam is not None else default_exam(department)
 
 
 class AppointmentOut(BaseModel):
@@ -15,6 +37,32 @@ class AppointmentOut(BaseModel):
     location: str | None
     status: str
     required_documents: list[str] = []
+    # Never null (design D3): the link's own exam, or else the department's default "…_VISIT" -
+    # resolved here so every consumer (the API, the dashboard) reads the same rule once.
+    exam_type: ExamTypeOut
+    instruction: InstructionOut
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_exam_and_instruction(cls, data):
+        already_resolved = isinstance(data, dict) and "exam_type" in data
+        if already_resolved:
+            return data
+        get = data.get if isinstance(data, dict) else (lambda k, default=None: getattr(data, k, default))
+        exam = _resolve_exam(get("department"), get("exam_code"))
+        return {
+            "appointment_id": get("appointment_id"),
+            "patient_id": get("patient_id"),
+            "department": get("department"),
+            "doctor_name": get("doctor_name"),
+            "appointment_at": get("appointment_at"),
+            "location": get("location"),
+            "status": get("status"),
+            "required_documents": get("required_documents") or [],
+            "exam_type": {"code": exam.code, "label": exam.label},
+            "instruction": {"source_id": exam.instruction_id, "version": exam.instruction_version,
+                            "title": exam.instruction_title},
+        }
 
     @field_validator("appointment_at")
     @classmethod
@@ -26,6 +74,7 @@ class AppointmentOut(BaseModel):
 class AppointmentResult(BaseModel):
     found: bool
     appointment: AppointmentOut | None
+    upcoming_count: int = 0
 
 
 class AppointmentList(BaseModel):

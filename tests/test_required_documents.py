@@ -114,9 +114,10 @@ def test_check_appointment_returns_the_required_documents(tmp_path):
         none = client.get("/api/v1/patients/P-20000/appointment").json()
     assert body["appointment"]["required_documents"] == ["CBC", "COAGULATION_TESTS", "ECG"]
     assert none["appointment"]["required_documents"] == []
-    # Nothing else in the contract changed.
+    # Nothing else in the contract changed (sub-project 18 task 2 added exam_type/instruction).
     assert set(body["appointment"]) == {"appointment_id", "patient_id", "department", "doctor_name",
-                                        "appointment_at", "location", "status", "required_documents"}
+                                        "appointment_at", "location", "status", "required_documents",
+                                        "exam_type", "instruction"}
 
 
 # --- the form (design §3) -----------------------------------------------------------------

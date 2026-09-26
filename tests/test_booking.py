@@ -300,7 +300,7 @@ def test_cancelling_marks_the_appointment_cancelled_and_hides_it_from_the_lookup
     assert response.headers["location"] == "/?cancelled=APT-8392"
     assert appointment.status == "Cancelled"  # never deleted
     assert "בוטל" in page.text
-    assert lookup.json() == {"found": False, "appointment": None}
+    assert lookup.json() == {"found": False, "appointment": None, "upcoming_count": 0}
     assert again.status_code == 409
     assert audit(app, "CancelAppointment") == ["cancelled"]
 

@@ -37,7 +37,7 @@ from .models import (
     ExamTypeRow,
 )
 from .patient_registry import PatientRegistry, PostgresPatientRegistry, RegistryUnavailable
-from .schemas import AppointmentList, AppointmentResult, ErrorResult, HealthResult
+from .schemas import AppointmentList, AppointmentResult, ErrorResult, HealthResult, InstructionResult
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("appointment-service")
@@ -844,6 +844,12 @@ def create_app(
             max_length=64,
             pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
         ),
+        appointment_id: str | None = Query(
+            default=None,
+            min_length=1,
+            max_length=64,
+            pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        ),
         x_case_id: str | None = Header(default=None, alias="X-Case-ID"),
         x_execution_id: str | None = Header(default=None, alias="X-Execution-ID"),
         supplied_api_key: str | None = Security(api_key_header),
@@ -880,15 +886,34 @@ def create_app(
                 if refusal is not None:
                     return refusal
 
-                appointment = session.scalar(
-                    select(Appointment)
-                    .where(
+                if appointment_id:
+                    # Only that patient's own Scheduled appointment - never another patient's,
+                    # and never a cancelled one (design D3/D6).
+                    appointment = session.scalar(
+                        select(Appointment).where(
+                            Appointment.appointment_id == appointment_id,
+                            Appointment.patient_id == patient_id,
+                            Appointment.status == "Scheduled",
+                        )
+                    )
+                else:
+                    appointment = session.scalar(
+                        select(Appointment)
+                        .where(
+                            Appointment.patient_id == patient_id,
+                            Appointment.status == "Scheduled",
+                        )
+                        .order_by(Appointment.appointment_at.asc())
+                        .limit(1)
+                    )
+                now_local = datetime.now(CLINIC_TZ).replace(tzinfo=None)
+                upcoming_count = session.scalar(
+                    select(func.count()).select_from(Appointment).where(
                         Appointment.patient_id == patient_id,
                         Appointment.status == "Scheduled",
+                        Appointment.appointment_at > now_local,
                     )
-                    .order_by(Appointment.appointment_at.asc())
-                    .limit(1)
-                )
+                ) or 0
                 result = "found" if appointment else "not_found"
                 latency = round((time.perf_counter() - started) * 1000)
                 _write_audit(
@@ -899,7 +924,8 @@ def create_app(
                     result=result,
                     latency_ms=latency,
                 )
-                return AppointmentResult(found=bool(appointment), appointment=appointment)
+                return AppointmentResult(found=bool(appointment), appointment=appointment,
+                                         upcoming_count=upcoming_count)
             except SimulatedTimeout:
                 latency = round((time.perf_counter() - started) * 1000)
                 _write_audit(
@@ -1025,6 +1051,72 @@ def create_app(
                     },
                     headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id},
                 )
+
+    @app.get(
+        "/api/v1/instructions/{source_id}",
+        response_model=InstructionResult,
+        responses={
+            400: {"model": ErrorResult},
+            401: {"model": ErrorResult},
+            404: {"model": ErrorResult},
+        },
+        tags=["Instructions"],
+        operation_id="GetInstruction",
+    )
+    def get_instruction(
+        request: Request,
+        response: Response,
+        source_id: str = ApiPath(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"),
+        version: str = Query(min_length=1, max_length=16),
+        x_case_id: str | None = Header(default=None, alias="X-Case-ID"),
+        x_execution_id: str | None = Header(default=None, alias="X-Execution-ID"),
+        supplied_api_key: str | None = Security(api_key_header),
+    ) -> InstructionResult | JSONResponse:
+        """The instruction system Hospital Agent's LoadInstructions reads (design D3/D8): only
+        source_id + version, no patient field at all (design §11) - so no registry check either."""
+        if api_auth and (
+            not api_key_value
+            or not supplied_api_key
+            or not secrets.compare_digest(supplied_api_key, api_key_value)
+        ):
+            return JSONResponse(
+                status_code=401,
+                content={"error": "unauthorized", "message": "A valid API key is required"},
+                headers={"WWW-Authenticate": "ApiKey"},
+            )
+        started = time.perf_counter()
+        case_id = (x_case_id or str(uuid4()))[:128]
+        execution_id = (x_execution_id or str(uuid4()))[:128]
+        response.headers["X-Case-ID"] = case_id
+        response.headers["X-Execution-ID"] = execution_id
+
+        exam = next(
+            (e for e in catalog.EXAM_TYPES
+             if e.instruction_id == source_id and e.instruction_version == version),
+            None,
+        )
+        result = "found" if exam else "not_found"
+        with request.app.state.SessionLocal() as session:
+            # No patient in this flow (design §11): the audit row's patient_id is the empty
+            # string, since the column itself is not-null.
+            _write_audit(
+                session,
+                case_id=case_id,
+                execution_id=execution_id,
+                patient_id="",
+                result=result,
+                operation="GetInstruction",
+                latency_ms=round((time.perf_counter() - started) * 1000),
+            )
+        if exam is None:
+            # Exactly {"error": ...} - no "message" field (the contract Hospital Agent reads).
+            return JSONResponse(
+                status_code=404,
+                content={"error": "instruction_not_found"},
+                headers={"X-Case-ID": case_id, "X-Execution-ID": execution_id},
+            )
+        return InstructionResult(source_id=exam.instruction_id, version=exam.instruction_version,
+                                 title=exam.instruction_title, text=exam.instruction_text)
 
     return app
 
