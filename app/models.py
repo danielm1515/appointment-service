@@ -29,6 +29,33 @@ class AppointmentRequiredDocument(Base):
         String(32), ForeignKey("document_types.code"), primary_key=True)
 
 
+class ExamTypeRow(Base):
+    """The exam-type catalog (design §4), seeded from app/catalog.py on every start, like
+    document_types. A new table (sub-project 18 D1): create_all adds it to an existing
+    database without touching any existing table."""
+
+    __tablename__ = "exam_types"
+
+    code: Mapped[str] = mapped_column(String(32), primary_key=True)
+    department: Mapped[str] = mapped_column(String(120), nullable=False)
+    label_he: Mapped[str] = mapped_column(String(120), nullable=False)
+    instruction_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    instruction_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    instruction_title: Mapped[str] = mapped_column(String(200), nullable=False)
+    instruction_text: Mapped[str] = mapped_column(String(4000), nullable=False)
+
+
+class AppointmentExamType(Base):
+    """One row per appointment: which exam type it was booked for (design D1). A new table -
+    an appointment with no row here resolves to its department's default exam."""
+
+    __tablename__ = "appointment_exam_types"
+
+    appointment_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("appointments.appointment_id", ondelete="CASCADE"), primary_key=True)
+    exam_code: Mapped[str] = mapped_column(String(32), ForeignKey("exam_types.code"), nullable=False)
+
+
 class Appointment(Base):
     __tablename__ = "appointments"
 
@@ -52,10 +79,18 @@ class Appointment(Base):
         cascade="all, delete-orphan", lazy="selectin",
         order_by="AppointmentRequiredDocument.document_type")
 
+    # One row or none (uselist=False): the exam type this appointment was booked for.
+    exam_type_link: Mapped["AppointmentExamType | None"] = relationship(
+        cascade="all, delete-orphan", lazy="selectin", uselist=False)
+
     @property
     def required_documents(self) -> list[str]:
         # Sorted here, so the API's promise does not rest on the relationship's order_by alone.
         return sorted(link.document_type for link in self.required_document_links)
+
+    @property
+    def exam_code(self) -> str | None:
+        return self.exam_type_link.exam_code if self.exam_type_link else None
 
 
 class AuditLog(Base):

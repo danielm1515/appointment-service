@@ -60,7 +60,7 @@ def csrf(client) -> str:
 
 def book(client, **overrides):
     data = {"csrf_token": csrf(client), "patient_id": "P-30000", "department": "Orthopedics",
-            "doctor_name": "Dr. Levi", **FUTURE_DATE,
+            "exam_type": "ORTHO_VISIT", "doctor_name": "Dr. Levi", **FUTURE_DATE,
             "appointment_time": FUTURE_TIME, "location": "Building C, Floor 1"}
     data.update(overrides)
     return client.post("/appointments", data=data)
@@ -415,9 +415,10 @@ def test_the_table_shows_the_departments_hebrew_label(tmp_path):
 # --- editing an existing appointment ---
 
 def edit(client, appointment_id, **overrides):
-    data = {"csrf_token": csrf(client), "department": "Neurology", "doctor_name": "Dr. Shapiro",
-            "appointment_day": "20", "appointment_month": "6", "appointment_year": str(NEXT_YEAR),
-            "appointment_time": "13:45", "location": "Building B, Floor 2"}
+    data = {"csrf_token": csrf(client), "department": "Neurology", "exam_type": "NEURO_VISIT",
+            "doctor_name": "Dr. Shapiro", "appointment_day": "20", "appointment_month": "6",
+            "appointment_year": str(NEXT_YEAR), "appointment_time": "13:45",
+            "location": "Building B, Floor 2"}
     data.update(overrides)
     return client.post(f"/appointments/{appointment_id}", data=data)
 

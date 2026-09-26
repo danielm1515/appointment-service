@@ -26,7 +26,16 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from . import catalog
 from .config import Settings
-from .models import AdminUser, Appointment, AppointmentRequiredDocument, AuditLog, Base, DocumentTypeRow
+from .models import (
+    AdminUser,
+    Appointment,
+    AppointmentExamType,
+    AppointmentRequiredDocument,
+    AuditLog,
+    Base,
+    DocumentTypeRow,
+    ExamTypeRow,
+)
 from .patient_registry import PatientRegistry, PostgresPatientRegistry, RegistryUnavailable
 from .schemas import AppointmentList, AppointmentResult, ErrorResult, HealthResult
 
@@ -60,6 +69,9 @@ def _validate_booking(form: dict[str, str]) -> tuple[str | None, datetime | None
         return f"הרופא שנבחר אינו שייך למחלקת {department.label}.", None
     if form["location"] and form["location"] not in department.locations:
         return f"המיקום שנבחר אינו שייך למחלקת {department.label}.", None
+    exam = catalog.EXAMS_BY_CODE.get(form["exam_type"])
+    if exam is None or exam.department != department.value:
+        return f"סוג הבדיקה שנבחר אינו שייך למחלקת {department.label}.", None
     parts = (form["appointment_day"], form["appointment_month"], form["appointment_year"])
     if not all(p.isdigit() for p in parts):
         return "יש לבחור תאריך מלא לתור: יום, חודש ושנה.", None
@@ -112,6 +124,38 @@ def _seed_document_types(session: Session) -> None:
             session.add(DocumentTypeRow(code=t.code, label_he=t.label, max_age_days=t.max_age_days))
         else:
             row.label_he, row.max_age_days = t.label, t.max_age_days
+    session.commit()
+
+
+def _seed_exam_types(session: Session) -> None:
+    """The exam-type catalog is reference data too, upserted on every start, in line with
+    app/catalog.py (sub-project 18 design D1)."""
+    for e in catalog.EXAM_TYPES:
+        row = session.get(ExamTypeRow, e.code)
+        if row is None:
+            session.add(ExamTypeRow(
+                code=e.code, department=e.department, label_he=e.label,
+                instruction_id=e.instruction_id, instruction_version=e.instruction_version,
+                instruction_title=e.instruction_title, instruction_text=e.instruction_text,
+            ))
+        else:
+            row.department = e.department
+            row.label_he = e.label
+            row.instruction_id = e.instruction_id
+            row.instruction_version = e.instruction_version
+            row.instruction_title = e.instruction_title
+            row.instruction_text = e.instruction_text
+    session.commit()
+
+
+def _backfill_exam_types(session: Session) -> None:
+    """The two demo appointments that predate exam types get one, once (design D2): only when
+    the appointment exists and still has no exam-type link - true for a fresh seed just as much
+    as for a pre-existing database made by the old schema."""
+    for appointment_id, exam_code in (("APT-8391", "NEURO_VISIT"), ("APT-8392", "CARD_STRESS")):
+        appointment = session.get(Appointment, appointment_id)
+        if appointment is not None and appointment.exam_type_link is None:
+            session.add(AppointmentExamType(appointment_id=appointment_id, exam_code=exam_code))
     session.commit()
 
 
@@ -232,11 +276,13 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        Base.metadata.create_all(engine)  # creates the two new tables in an existing database too
+        Base.metadata.create_all(engine)  # creates new tables in an existing database too
         with SessionLocal() as session:
             _seed_document_types(session)
+            _seed_exam_types(session)
             if should_seed:
                 _seed(session)
+            _backfill_exam_types(session)
         yield
         engine.dispose()
         if hasattr(registry, "dispose"):
@@ -348,6 +394,8 @@ def create_app(
                 "department_label": catalog.department_label,
                 "document_types": catalog.DOCUMENT_TYPES,
                 "document_type_label": catalog.document_type_label,
+                "exam_types": catalog.EXAM_TYPES,
+                "exam_type_label": catalog.exam_type_label,
                 "time_slots": catalog.TIME_SLOTS,
                 "editing": editing,
                 "months": catalog.MONTHS,
@@ -381,6 +429,7 @@ def create_app(
         csrf_token_field: str = Form("", alias="csrf_token"),
         patient_id: str = Form(""),
         department: str = Form(""),
+        exam_type: str = Form(""),
         doctor_name: str = Form(""),
         appointment_day: str = Form(""),
         appointment_month: str = Form(""),
@@ -398,6 +447,7 @@ def create_app(
         form = {
             "patient_id": patient_id.strip(),
             "department": department.strip(),
+            "exam_type": exam_type.strip(),
             "doctor_name": doctor_name.strip(),
             "appointment_day": appointment_day.strip(),
             "appointment_month": appointment_month.strip(),
@@ -447,6 +497,7 @@ def create_app(
                 location=form["location"] or None,
                 status="Scheduled",
                 required_document_links=[AppointmentRequiredDocument(document_type=c) for c in codes],
+                exam_type_link=AppointmentExamType(exam_code=form["exam_type"]),
             ))
             # One commit: the appointment and its audit row land together or not at all.
             _write_audit(session, case_id=actor(request), execution_id=appointment_id,
@@ -462,6 +513,7 @@ def create_app(
         return {
             "patient_id": appointment.patient_id,
             "department": appointment.department,
+            "exam_type": appointment.exam_code or "",
             "doctor_name": appointment.doctor_name or "",
             "location": appointment.location or "",
             "appointment_day": str(at.day),
@@ -501,6 +553,7 @@ def create_app(
         appointment_id: str = ApiPath(max_length=64),
         csrf_token_field: str = Form("", alias="csrf_token"),
         department: str = Form(""),
+        exam_type: str = Form(""),
         doctor_name: str = Form(""),
         appointment_day: str = Form(""),
         appointment_month: str = Form(""),
@@ -524,6 +577,7 @@ def create_app(
             form = {
                 "patient_id": appointment.patient_id,
                 "department": department.strip(),
+                "exam_type": exam_type.strip(),
                 "doctor_name": doctor_name.strip(),
                 "appointment_day": appointment_day.strip(),
                 "appointment_month": appointment_month.strip(),
@@ -545,6 +599,7 @@ def create_app(
             appointment.location = form["location"] or None
             appointment.appointment_at = when
             appointment.required_document_links = [AppointmentRequiredDocument(document_type=c) for c in codes]
+            appointment.exam_type_link = AppointmentExamType(exam_code=form["exam_type"])
             # One commit: the change and its audit row land together or not at all.
             _write_audit(session, case_id=actor(request), execution_id=appointment_id,
                          patient_id=appointment.patient_id, result="updated",

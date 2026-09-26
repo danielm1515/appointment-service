@@ -136,8 +136,9 @@ def csrf(client):
 
 def booking(client, **overrides):
     data = {"csrf_token": csrf(client), "patient_id": "P-30000", "department": "Orthopedics",
-            "doctor_name": "Dr. Levi", "appointment_day": "14", "appointment_month": "5",
-            "appointment_year": str(NEXT_YEAR), "appointment_time": "09:15", "location": "Building C, Floor 1"}
+            "exam_type": "ORTHO_VISIT", "doctor_name": "Dr. Levi", "appointment_day": "14",
+            "appointment_month": "5", "appointment_year": str(NEXT_YEAR), "appointment_time": "09:15",
+            "location": "Building C, Floor 1"}
     data.update(overrides)
     return data
 
@@ -217,9 +218,10 @@ def test_editing_shows_the_stored_types_not_a_derived_list(tmp_path):
 
 
 def edit_data(client, **overrides):
-    data = {"csrf_token": csrf(client), "department": "Neurology", "doctor_name": "Dr. Cohen",
-            "appointment_day": "20", "appointment_month": "6", "appointment_year": str(NEXT_YEAR),
-            "appointment_time": "13:45", "location": "Building B, Floor 2"}
+    data = {"csrf_token": csrf(client), "department": "Neurology", "exam_type": "NEURO_VISIT",
+            "doctor_name": "Dr. Cohen", "appointment_day": "20", "appointment_month": "6",
+            "appointment_year": str(NEXT_YEAR), "appointment_time": "13:45",
+            "location": "Building B, Floor 2"}
     data.update(overrides)
     return data
 
