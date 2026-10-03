@@ -5,7 +5,7 @@
   <section class="auth-main">
     <header class="auth-top">{% include "_brand.html" %}<button id="theme-toggle" class="theme-toggle" type="button">מצב כהה</button></header>
     <div class="auth-content">
-      <p class="eyebrow">STAFF ACCESS</p><h1>כניסה למערכת התורים</h1><p class="auth-lede">הזינו את פרטי המנהל ואת הקוד העדכני מ־Microsoft Authenticator.</p>
+      <p class="eyebrow">STAFF ACCESS</p><h1>כניסה למערכת התורים</h1>
       {% if configured %}<div class="notice notice-success">Microsoft Authenticator הוגדר בהצלחה. אפשר להתחבר.</div>{% endif %}
       {% if error %}<div class="notice notice-error" role="alert">{{ error }}</div>{% endif %}
       <form class="auth-form" method="post" action="/login">
@@ -15,7 +15,6 @@
         <button class="btn btn-primary" type="submit">כניסה מאובטחת</button>
       </form>
     </div>
-    <p class="auth-audit"><span aria-hidden="true">◈</span><span>הגישה למידע מיועדת למשתמשים מורשים ומתועדת ביומן הביקורת.</span></p>
   </section>
-  <aside class="auth-side"><div class="auth-side-content"><p class="eyebrow">APPOINTMENT SERVICE</p><h2>כל התורים במקום אחד,<br>באופן ברור ומאובטח.</h2><p>ממשק פנימי לצפייה בתורים ולחיפוש מהיר לפי מזהה מטופל.</p><ul class="side-list"><li><span class="side-icon">✓</span><span>אימות דו־שלבי בכל כניסה</span></li><li><span class="side-icon">✓</span><span>גישה לקריאה בלבד</span></li><li><span class="side-icon">✓</span><span>חיבור מאובטח ל־Hospital Agent</span></li></ul></div></aside>
+  <aside class="auth-side"><div class="auth-side-content" aria-hidden="true"></div></aside>
 </main>{% include "_theme_script.html" %}</body></html>
