@@ -3,7 +3,7 @@ services:
     build: .
     environment:
       DATABASE_URL: sqlite:////data/appointments.db
-      SEED_DEMO_DATA: "true"
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
       ENABLE_FAILURE_SIMULATION: "true"
       MOCK_TIMEOUT_PATIENT_ID: P-TIMEOUT
       SERVICE_VERSION: 1.5.0
